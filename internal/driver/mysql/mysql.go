@@ -1,0 +1,330 @@
+// Package mysql implements driver.Driver for MySQL.
+package mysql
+
+import (
+	"context"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
+
+	"db/internal/driver"
+)
+
+type Driver struct{}
+
+var _ driver.Driver = Driver{}
+
+func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) {
+	port := cfg.Port
+	if port == 0 {
+		port = 3306
+	}
+	mc := mysql.NewConfig()
+	mc.Net = "tcp"
+	mc.Addr = net.JoinHostPort(cfg.Host, strconv.Itoa(port))
+	mc.User = cfg.User
+	mc.Passwd = cfg.Password
+	mc.DBName = cfg.Database
+	mc.MultiStatements = true
+	connector, err := mysql.NewConnector(mc)
+	if err != nil {
+		return nil, err
+	}
+
+	// A Conn is one session, so the pool is only a way to reach a single pinned connection.
+	db := sql.OpenDB(connector)
+	sc, err := db.Conn(ctx)
+	if err != nil {
+		db.Close()
+		return nil, wrapErr(ctx, err)
+	}
+	c := &conn{db: db, sc: sc}
+	// The ID is what KILL QUERY names to cancel a query of this session.
+	if err := sc.QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&c.id); err != nil {
+		c.Close()
+		return nil, wrapErr(ctx, err)
+	}
+	return c, nil
+}
+
+func (Driver) QuoteIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+type conn struct {
+	db *sql.DB
+	sc *sql.Conn
+	id int64
+}
+
+func (c *conn) Ping(ctx context.Context) error {
+	return wrapErr(ctx, c.sc.PingContext(ctx))
+}
+
+func (c *conn) Close() error {
+	return errors.Join(c.sc.Close(), c.db.Close())
+}
+
+// Databases and Schemas return the same names: a MySQL schema is a database.
+func (c *conn) Databases(ctx context.Context) ([]string, error) {
+	return c.Schemas(ctx)
+}
+
+func (c *conn) Schemas(ctx context.Context) ([]string, error) {
+	// System schemas sort last.
+	rows, err := c.sc.QueryContext(ctx, `
+		SELECT schema_name FROM information_schema.schemata
+		ORDER BY schema_name IN ('information_schema', 'mysql', 'performance_schema', 'sys'), schema_name`)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, wrapErr(ctx, rows.Err())
+}
+
+func (c *conn) Tables(ctx context.Context, schema string) ([]driver.Table, error) {
+	rows, err := c.sc.QueryContext(ctx, `
+		SELECT table_name, table_type FROM information_schema.tables
+		WHERE table_schema = ? ORDER BY table_name`, schema)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	defer rows.Close()
+	var tables []driver.Table
+	for rows.Next() {
+		var name, kind string
+		if err := rows.Scan(&name, &kind); err != nil {
+			return nil, err
+		}
+		table := driver.Table{Name: name}
+		if strings.Contains(kind, "VIEW") {
+			table.Kind = driver.KindView
+		}
+		tables = append(tables, table)
+	}
+	return tables, wrapErr(ctx, rows.Err())
+}
+
+func (c *conn) Query(ctx context.Context, query string) (driver.Results, error) {
+	r := &results{ctx: ctx, c: c, done: make(chan struct{})}
+	r.run = context.WithoutCancel(ctx)
+	r.watch.Add(1)
+	go func() {
+		defer r.watch.Done()
+		select {
+		case <-ctx.Done():
+			c.kill()
+		case <-r.done:
+		}
+	}()
+	rows, err := c.sc.QueryContext(r.run, query)
+	if err != nil {
+		r.err = wrapErr(ctx, err)
+		r.finished = true
+		return r, nil
+	}
+	r.rows = rows
+	return r, nil
+}
+
+func (c *conn) kill() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c.db.ExecContext(ctx, "KILL QUERY "+strconv.FormatInt(c.id, 10))
+}
+
+type results struct {
+	ctx context.Context
+	run  context.Context
+	c    *conn
+	rows *sql.Rows
+
+	// done is closed when the results are, and watch waits for the goroutine that cancels the query.
+	done  chan struct{}
+	watch sync.WaitGroup
+
+	started bool
+	// finished is set once every result set has been read.
+	finished bool
+	// status is set while the current result is that of a statement that returned no rows.
+	status bool
+	closed bool
+
+	cols     []driver.Column
+	binary   []bool
+	raw      []sql.RawBytes
+	dest     []any
+	row      []driver.Value
+	affected int64
+	err      error
+}
+
+func (r *results) NextResultSet() bool {
+	if r.closed || r.finished || r.err != nil {
+		return false
+	}
+	r.cols, r.row, r.status, r.affected = nil, nil, false, 0
+
+	// The driver passes over the statements that return no rows, so each result set here has columns,
+	// except the first when the query's first statements return none.
+	more := true
+	if r.started || !r.hasColumns() {
+		more = r.rows.NextResultSet()
+	}
+	r.started = true
+	if more {
+		return r.readColumns()
+	}
+	if err := r.rows.Err(); err != nil {
+		r.err = wrapErr(r.ctx, err)
+		r.finished = true
+		return false
+	}
+
+	// ROW_COUNT is -1 after a statement that returned rows, whose result was read above.
+	// Otherwise the last statement returned none, and its count stands for a result of its own.
+	r.finished = true
+	var count int64
+	if err := r.c.sc.QueryRowContext(r.run, "SELECT ROW_COUNT()").Scan(&count); err != nil || count < 0 {
+		return false
+	}
+	r.status, r.affected = true, count
+	return true
+}
+
+func (r *results) hasColumns() bool {
+	cols, err := r.rows.Columns()
+	return err == nil && len(cols) > 0
+}
+
+func (r *results) readColumns() bool {
+	types, err := r.rows.ColumnTypes()
+	if err != nil {
+		r.err = wrapErr(r.ctx, err)
+		return false
+	}
+	r.cols = make([]driver.Column, len(types))
+	r.binary = make([]bool, len(types))
+	r.raw = make([]sql.RawBytes, len(types))
+	r.dest = make([]any, len(types))
+	for i, t := range types {
+		name := t.DatabaseTypeName()
+		kind := kindOf(name)
+		r.cols[i] = driver.Column{Name: t.Name(), Type: strings.ToLower(name), Kind: kind}
+		r.binary[i] = kind == driver.KindBinary
+		r.dest[i] = &r.raw[i]
+	}
+	return true
+}
+
+func (r *results) Next() bool {
+	if r.closed || r.status || r.cols == nil || r.err != nil {
+		return false
+	}
+	if !r.rows.Next() {
+		if err := r.rows.Err(); err != nil {
+			r.err = wrapErr(r.ctx, err)
+		}
+		return false
+	}
+	if err := r.rows.Scan(r.dest...); err != nil {
+		r.err = wrapErr(r.ctx, err)
+		return false
+	}
+	r.row = make([]driver.Value, len(r.raw))
+	for i, v := range r.raw {
+		switch {
+		case v == nil:
+			r.row[i].Null = true
+		case r.binary[i]:
+			r.row[i].Text = "0x" + hex.EncodeToString(v)
+		default:
+			r.row[i].Text = string(v)
+		}
+	}
+	return true
+}
+
+func (r *results) Columns() []driver.Column { return r.cols }
+func (r *results) Row() []driver.Value      { return r.row }
+func (r *results) RowsAffected() int64      { return r.affected }
+func (r *results) Err() error               { return r.err }
+
+func (r *results) Command() string {
+	if !r.status {
+		return ""
+	}
+	if r.affected == 1 {
+		return "Query OK, 1 row affected"
+	}
+	return fmt.Sprintf("Query OK, %d rows affected", r.affected)
+}
+
+func (r *results) Close() error {
+	if r.closed {
+		return r.err
+	}
+	r.closed = true
+	if r.rows != nil {
+		// Closing reads the rows that remain, so stop the query first rather than receive them all.
+		if !r.finished && r.err == nil {
+			r.c.kill()
+		}
+		r.rows.Close()
+	}
+	// Some statements end without an error when killed, as SLEEP does, so the cancel is reported here.
+	if r.err == nil && r.ctx.Err() != nil {
+		r.err = r.ctx.Err()
+	}
+	close(r.done)
+	// A cancel on its way must land before the next query starts, or it would stop that one.
+	r.watch.Wait()
+	return r.err
+}
+
+func wrapErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w: %v", ctx.Err(), err)
+	}
+	var me *mysql.MySQLError
+	if errors.As(err, &me) {
+		return &driver.Error{Code: strconv.Itoa(int(me.Number)), Message: me.Message}
+	}
+	return err
+}
+
+// kindOf classifies a type name as the driver reports it, such as "UNSIGNED BIGINT" or "VARCHAR".
+func kindOf(name string) driver.ColumnKind {
+	switch {
+	case name == "JSON":
+		return driver.KindJSON
+	case strings.Contains(name, "INT"), name == "DECIMAL", name == "FLOAT", name == "DOUBLE", name == "YEAR",
+		strings.HasPrefix(name, "UNSIGNED "):
+		return driver.KindNumber
+	case name == "DATE", name == "DATETIME", name == "TIMESTAMP", name == "TIME":
+		return driver.KindTime
+	case strings.Contains(name, "BLOB"), strings.Contains(name, "BINARY"), name == "BIT", name == "GEOMETRY":
+		return driver.KindBinary
+	}
+	return driver.KindText
+}
+

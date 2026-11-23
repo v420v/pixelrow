@@ -7,10 +7,12 @@ tool github.com/egoist/mygo/cmd/mygo
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/egoist/mygo v0.10.0
+	github.com/go-sql-driver/mysql v1.10.2
 	github.com/jackc/pgx/v5 v5.13.0
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect

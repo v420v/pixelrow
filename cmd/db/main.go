@@ -9,6 +9,7 @@ import (
 	"db/internal/app"
 	"db/internal/config"
 	"db/internal/driver"
+	"db/internal/driver/mysql"
 	"db/internal/driver/postgres"
 )
 
@@ -26,7 +27,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		drivers := map[string]driver.Driver{"postgres": postgres.Driver{}}
+		drivers := map[string]driver.Driver{
+			"postgres": postgres.Driver{},
+			"mysql": mysql.Driver{},
+		}
 		a := app.New(drivers, path, update, mygo.Shell.OpenPath)
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "db client",
