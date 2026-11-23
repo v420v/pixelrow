@@ -25,7 +25,7 @@ var _ driver.Driver = Driver{}
 func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) {
 	port := cfg.Port
 	if port == 0 {
-		port = 3306
+		port = Driver{}.DefaultPort()
 	}
 	mc := mysql.NewConfig()
 	mc.Net = "tcp"
@@ -59,6 +59,8 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 	}
 	return c, nil
 }
+
+func (Driver) DefaultPort() int { return 3306 }
 
 func (Driver) QuoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"

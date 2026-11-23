@@ -54,6 +54,8 @@ type Options struct {
 	SaveFile func(name string) (string, error)
 	// ChooseFile asks for a file to open, and returns "" when the user cancels.
 	ChooseFile func() (string, error)
+	// Askpass is the path of a program that calls tools.Askpass, for ssh to get passphrases from: the app's own executable.
+	Askpass string
 }
 
 func New(o Options) *App {
@@ -63,6 +65,7 @@ func New(o Options) *App {
 		drivers:      o.Drivers,
 		update:       o.Update,
 		openFile:     o.OpenFile,
+		askpass:      o.Askpass,
 		onQuery:      a.newQuery,
 		onTable:      a.openTable,
 		onDisconnect: a.disconnected,
@@ -74,6 +77,11 @@ func New(o Options) *App {
 	a.connections.onRunFile = a.fileRunner.ask
 	a.connections.footer = a.jobs.view
 	return a
+}
+
+// Close ends what would outlive the app, as it quits.
+func (a *App) Close() {
+	a.connections.Close()
 }
 
 func (a *App) View(c *ui.Context) {

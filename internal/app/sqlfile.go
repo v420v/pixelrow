@@ -154,7 +154,11 @@ func (r *fileRunner) start() {
 		},
 		canceled,
 		func(ctx context.Context) (string, string, error) {
-			err := f.client.Run(ctx, f.program, f.path, o, &read)
+			var err error
+			if o.Host, o.Port, err = r.connections.endpoint(ctx, f.conf); err != nil {
+				return "", "", err
+			}
+			err = f.client.Run(ctx, f.program, f.path, o, &read)
 			return "Ran " + name + " on " + f.conf.Name, f.path, err
 		},
 		// Whatever the outcome, the file may have created or dropped tables.

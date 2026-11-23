@@ -15,6 +15,8 @@ type Driver interface {
 	// Open establishes a connection. Canceling ctx aborts the attempt.
 	Open(ctx context.Context, cfg Config) (Conn, error)
 	QuoteIdent(name string) string
+	// DefaultPort is the port Open connects to when Config names none.
+	DefaultPort() int
 }
 
 // Conn is a single database session.

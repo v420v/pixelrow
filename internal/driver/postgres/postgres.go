@@ -25,7 +25,7 @@ var _ driver.Driver = Driver{}
 func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) {
 	port := cfg.Port
 	if port == 0 {
-		port = 5432
+		port = Driver{}.DefaultPort()
 	}
 	u := url.URL{
 		Scheme: "postgres",
@@ -48,6 +48,8 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 	}
 	return &conn{pg: c}, nil
 }
+
+func (Driver) DefaultPort() int { return 5432 }
 
 func (Driver) QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`

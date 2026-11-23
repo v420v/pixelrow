@@ -19,8 +19,10 @@ type connections struct {
 	drivers  map[string]driver.Driver
 	update   func(fn func())
 	openFile func(path string) error
-	onQuery  func(conn string)
-	onTable  func(conn, schema, table string)
+	// askpass is the path of the program that hands ssh a passphrase: the app itself.
+	askpass string
+	onQuery func(conn string)
+	onTable func(conn, schema, table string)
 	// onDisconnect is called after a connection is disconnected, or changed or removed in the config file.
 	onDisconnect func(conn string)
 	// onDump is called to dump table of schema, or the whole schema when table is "".
@@ -39,9 +41,10 @@ type connections struct {
 	selectedTable string
 	fileErr       error
 
-	// mu guards confs, which connections being opened read off the UI thread.
-	mu    sync.RWMutex
-	confs map[string]config.Connection
+	// mu guards confs, tools and tunnels, which connections being opened read off the UI thread.
+	mu      sync.RWMutex
+	confs   map[string]config.Connection
+	tunnels map[string]*tunnel
 }
 
 type connNode struct {
@@ -190,6 +193,7 @@ func (s *connections) disconnect(n *connNode) {
 	}
 	n.open = false
 	s.onDisconnect(n.conf.Name)
+	s.closeTunnel(n.conf.Name)
 }
 
 // reload reads the config file again. Connections it changed or removed are disconnected.
@@ -206,7 +210,6 @@ func (s *connections) reload() {
 		// The connections already open stay as they are until the file reads again.
 		return
 	}
-	s.tools = file.Tools
 
 	old := map[string]*connNode{}
 	for _, n := range s.nodes {
@@ -225,7 +228,7 @@ func (s *connections) reload() {
 		nodes[i] = n
 	}
 	s.mu.Lock()
-	s.confs = confs
+	s.confs, s.tools = confs, file.Tools
 	s.mu.Unlock()
 	s.nodes = nodes
 	for _, n := range old {
@@ -233,6 +236,7 @@ func (s *connections) reload() {
 			n.browser.close()
 		}
 		s.onDisconnect(n.conf.Name)
+		s.closeTunnel(n.conf.Name)
 	}
 	if _, ok := confs[s.selected]; !ok {
 		s.selected, s.selectedTable = "", ""
@@ -261,16 +265,115 @@ func (s *connections) dial(ctx context.Context, name string) (driver.Conn, error
 	if drv == nil {
 		return nil, fmt.Errorf("unknown kind %q of connection %q", conf.Kind, conf.Name)
 	}
+	host, port, err := s.endpoint(ctx, conf)
+	if err != nil {
+		return nil, err
+	}
 	return drv.Open(ctx, driver.Config{
-		Host:     conf.Host,
-		Port:     conf.Port,
+		Host:     host,
+		Port:     port,
 		User:     conf.User,
 		Password: conf.Password,
 		Database: conf.Database,
 	})
 }
 
-// address describes where conn points, as user@host:port/database.
+// tunnel is the SSH tunnel of one connection, shared by all its sessions.
+type tunnel struct {
+	// mu is held while the tunnel opens, so that sessions starting together wait for one ssh rather than start several.
+	mu sync.Mutex
+	// conf is what the tunnel was opened for: a change in the config file needs a new one.
+	conf config.Connection
+	open *tools.Tunnel
+}
+
+// endpoint returns where to connect to reach the database of conf: the database itself, or the local end of its SSH tunnel, opened if needed.
+// It runs off the UI thread.
+func (s *connections) endpoint(ctx context.Context, conf config.Connection) (host string, port int, err error) {
+	if conf.SSH.Host == "" {
+		return conf.Host, conf.Port, nil
+	}
+	s.mu.Lock()
+	if s.tunnels == nil {
+		s.tunnels = map[string]*tunnel{}
+	}
+	t := s.tunnels[conf.Name]
+	if t == nil {
+		t = &tunnel{}
+		s.tunnels[conf.Name] = t
+	}
+	program := s.tools["ssh"]
+	s.mu.Unlock()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.open != nil && (!t.open.Alive() || t.conf != conf) {
+		t.open.Close()
+		t.open = nil
+	}
+	if t.open == nil {
+		ssh, err := tools.Find("ssh", program)
+		if err != nil {
+			return "", 0, err
+		}
+		remote := conf.Port
+		if remote == 0 {
+			remote = s.drivers[conf.Kind].DefaultPort()
+		}
+		server := tools.Server{
+			Destination: conf.SSH.Destination(),
+			Port:        conf.SSH.Port,
+			Key:         conf.SSH.Key,
+			Passphrase:  conf.SSH.Passphrase,
+			Password:    conf.SSH.Password,
+			Askpass:     s.askpass,
+		}
+		opened, err := tools.OpenTunnel(ctx, ssh, server, conf.Host, remote)
+		if err != nil {
+			return "", 0, fmt.Errorf("SSH tunnel through %s: %w", conf.SSH.Destination(), err)
+		}
+		t.open, t.conf = opened, conf
+	}
+	return "127.0.0.1", t.open.Port, nil
+}
+
+// Sessions through the tunnel are cut.
+func (s *connections) closeTunnel(name string) {
+	s.mu.Lock()
+	t := s.tunnels[name]
+	delete(s.tunnels, name)
+	s.mu.Unlock()
+	if t == nil {
+		return
+	}
+	// The tunnel may be opening, which is waited for off the UI thread.
+	go func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if t.open != nil {
+			t.open.Close()
+			t.open = nil
+		}
+	}()
+}
+
+// Close ends every SSH tunnel, and waits for them, as the app quits: an ssh left running would outlive it.
+func (s *connections) Close() {
+	s.mu.Lock()
+	tunnels := s.tunnels
+	s.tunnels = nil
+	s.mu.Unlock()
+	for _, t := range tunnels {
+		t.mu.Lock()
+		if t.open != nil {
+			t.open.Close()
+			t.open = nil
+		}
+		t.mu.Unlock()
+	}
+}
+
+// address describes where conn points, as user@host:port/database, with the SSH server it goes through.
 func address(conn config.Connection) string {
 	s := conn.Host
 	if conn.User != "" {
@@ -281,6 +384,9 @@ func address(conn config.Connection) string {
 	}
 	if conn.Database != "" {
 		s += "/" + conn.Database
+	}
+	if conn.SSH.Host != "" {
+		s += " via " + conn.SSH.Destination()
 	}
 	return s
 }

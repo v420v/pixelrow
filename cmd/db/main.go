@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -11,9 +12,18 @@ import (
 	"db/internal/driver"
 	"db/internal/driver/mysql"
 	"db/internal/driver/postgres"
+	"db/internal/tools"
 )
 
 func main() {
+	// ssh starts the app again to ask it for a passphrase, which must not open a window.
+	if tools.Askpass() {
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		log.Fatal(err)
+	}
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window
 		// Results arrive from other goroutines: RunOnMain reads win on the thread that sets it.
@@ -36,6 +46,7 @@ func main() {
 			ConfigPath: path,
 			Update:     update,
 			OpenFile:   mygo.Shell.OpenPath,
+			Askpass:    executable,
 			SaveFile: func(name string) (string, error) {
 				return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, DefaultPath: name})
 			},
@@ -47,6 +58,7 @@ func main() {
 				return paths[0], nil
 			},
 		})
+		mygo.App.OnQuit(a.Close)
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "db client",
 			Width:   1280,

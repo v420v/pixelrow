@@ -22,6 +22,69 @@ type Connection struct {
 	User     string `toml:"user"`
 	Password string `toml:"password"`
 	Database string `toml:"database"`
+	// SSH is the SSH server to reach Host through. Its zero value connects directly.
+	SSH SSH `toml:"ssh"`
+}
+
+// SSH is the server an SSH tunnel goes through: the ssh table of a connection, or a string that is its host alone.
+type SSH struct {
+	// Host is the server, as the ssh command takes it: a name, an address, or a Host of ~/.ssh/config.
+	Host string
+	User string
+	// Port is 0 for the port ssh would use by itself.
+	Port int
+	// Key is the path of the private key to sign in with, or "" for the keys ssh would try by itself.
+	Key string
+	// Passphrase unlocks the key, and Password signs in to the server. Either can be empty.
+	Passphrase string
+	Password   string
+}
+
+func (s SSH) Destination() string {
+	if s.User != "" {
+		return s.User + "@" + s.Host
+	}
+	return s.Host
+}
+
+func (s *SSH) UnmarshalTOML(v any) error {
+	switch v := v.(type) {
+	case string:
+		s.Host = v
+	case map[string]any:
+		for key, value := range v {
+			text, isText := value.(string)
+			number, isNumber := value.(int64)
+			switch {
+			case key == "host" && isText:
+				s.Host = text
+			case key == "user" && isText:
+				s.User = text
+			case key == "key" && isText:
+				s.Key = text
+			case key == "passphrase" && isText:
+				s.Passphrase = text
+			case key == "password" && isText:
+				s.Password = text
+			case key == "port" && isNumber:
+				s.Port = int(number)
+			// The decoder cannot report what this method passes over, so a misspelled key is caught here.
+			case key == "host" || key == "user" || key == "key" || key == "port" || key == "passphrase" || key == "password":
+				return fmt.Errorf("ssh.%s has the wrong type", key)
+			default:
+				return fmt.Errorf("unknown key %q in ssh", key)
+			}
+		}
+		if s.Host == "" {
+			return errors.New("ssh has no host")
+		}
+	default:
+		return errors.New("ssh must be a string or a table")
+	}
+	if s.Port < 0 || s.Port > 65535 {
+		return fmt.Errorf("ssh has an invalid port %d", s.Port)
+	}
+	return nil
 }
 
 // DefaultKind is the kind of a connection that names none.
@@ -39,6 +102,22 @@ const template = `# Connections of the db client.
 # user = "postgres"
 # password = "postgres"
 # database = "postgres"
+
+# A database that only an SSH server reaches: host is the database as that server sees it.
+# The server's host key must already be known: connect to it once with ssh in a terminal.
+# [connections.production]
+# host = "db.internal"
+# user = "app"
+# password = "secret"
+# database = "app"
+#
+# [connections.production.ssh]
+# host = "bastion.example.com"
+# user = "me"
+# port = 22
+# key = "~/.ssh/id_ed25519"
+# passphrase = "the passphrase of the key"
+# password = "the password of the server, where it asks for one"
 
 # Where the programs that dump and that run SQL files are, when the app does not find them by itself.
 # [tools]
@@ -84,7 +163,7 @@ type File struct {
 }
 
 // knownTools are the programs a [tools] table can place.
-var knownTools = []string{"mysqldump", "pg_dump", "mysql", "psql"}
+var knownTools = []string{"mysqldump", "pg_dump", "mysql", "psql", "ssh"}
 
 // A missing file is an empty one.
 func Load(path string) (File, error) {

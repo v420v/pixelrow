@@ -260,6 +260,10 @@ func (d *dumper) start() {
 		func() (string, float64) { return formatBytes(written.Load()), -1 },
 		"Dump of "+label+" canceled.",
 		func(ctx context.Context) (string, string, error) {
+			var err error
+			if o.Host, o.Port, err = d.connections.endpoint(ctx, f.conf); err != nil {
+				return "", "", err
+			}
 			n, err := f.tool.Run(ctx, f.program, path, o, &written)
 			return fmt.Sprintf("Dumped %s to %s · %s", label, filepath.Base(path), formatBytes(n)), path, err
 		}, nil)
