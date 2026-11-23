@@ -2,6 +2,7 @@
   "name": "db",
   "identifier": "com.example.db",
   "version": "0.1.0",
+  "main": "./cmd/db",
   "out": "build",
   "ios": { "minimumSystemVersion": "17.0" },
   "android": { "minSdk": 26 }
