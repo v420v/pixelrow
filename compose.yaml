@@ -12,3 +12,16 @@ services:
       timeout: 3s
       retries: 30
 
+  postgres-warehouse:
+    image: postgres:17
+    ports:
+      - "127.0.0.1:55433:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: warehouse
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "warehouse"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
