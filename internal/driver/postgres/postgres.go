@@ -104,6 +104,81 @@ func (c *conn) Tables(ctx context.Context, schema string) ([]driver.Table, error
 	return tables, nil
 }
 
+func (c *conn) Describe(ctx context.Context, schema, table string) (*driver.TableInfo, error) {
+	info := &driver.TableInfo{}
+
+	rows, err := c.read(ctx, `
+		SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid),
+			EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY (i.indkey))
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+		ORDER BY a.attnum`, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		info.Columns = append(info.Columns, driver.ColumnInfo{
+			Name:       string(r[0]),
+			Type:       string(r[1]),
+			Nullable:   string(r[2]) == "f",
+			Default:    driver.Value{Text: string(r[3]), Null: r[3] == nil},
+			PrimaryKey: string(r[4]) == "t",
+		})
+	}
+
+	rows, err = c.read(ctx, `
+		SELECT ic.relname, i.indisunique, i.indisprimary,
+			(SELECT string_agg(pg_get_indexdef(i.indexrelid, k, true), ', ' ORDER BY k) FROM generate_series(1, i.indnkeyatts) AS k)
+		FROM pg_index i
+		JOIN pg_class ic ON ic.oid = i.indexrelid
+		JOIN pg_class c ON c.oid = i.indrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2
+		ORDER BY i.indisprimary DESC, ic.relname`, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		info.Indexes = append(info.Indexes, driver.Index{
+			Name:    string(r[0]),
+			Unique:  string(r[1]) == "t",
+			Primary: string(r[2]) == "t",
+			Columns: string(r[3]),
+		})
+	}
+
+	rows, err = c.read(ctx, `
+		SELECT con.conname,
+			(SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+			fn.nspname, fc.relname,
+			(SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+		FROM pg_constraint con
+		JOIN pg_class c ON c.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_class fc ON fc.oid = con.confrelid
+		JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+		WHERE con.contype = 'f' AND n.nspname = $1 AND c.relname = $2
+		ORDER BY con.conname`, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		info.ForeignKeys = append(info.ForeignKeys, driver.ForeignKey{
+			Name:       string(r[0]),
+			Columns:    string(r[1]),
+			RefSchema:  string(r[2]),
+			RefTable:   string(r[3]),
+			RefColumns: string(r[4]),
+		})
+	}
+	return info, nil
+}
+
 func (c *conn) names(ctx context.Context, sql string) ([]string, error) {
 	rows, err := c.read(ctx, sql)
 	if err != nil {

@@ -27,6 +27,7 @@ type Conn interface {
 	Schemas(ctx context.Context) ([]string, error)
 	// Tables returns the tables and views in schema, sorted by name.
 	Tables(ctx context.Context, schema string) ([]Table, error)
+	Describe(ctx context.Context, schema, table string) (*TableInfo, error)
 
 	// Query runs sql, which may contain multiple statements.
 	// Canceling ctx stops the running query on the server.
@@ -48,6 +49,42 @@ const (
 type Table struct {
 	Name string
 	Kind TableKind
+}
+
+// TableInfo is the structure of a table or view.
+type TableInfo struct {
+	Columns     []ColumnInfo
+	Indexes     []Index
+	ForeignKeys []ForeignKey
+	// DDL is the statement that creates the table, or "" where the database has no statement that returns it.
+	DDL string
+}
+
+type ColumnInfo struct {
+	Name string
+	// Type is the type as the database writes it, with its length or precision, such as "varchar(20)".
+	Type     string
+	Nullable bool
+	// Default is the default as the database writes it, and Null for a column that has none.
+	Default    Value
+	PrimaryKey bool
+}
+
+type Index struct {
+	Name string
+	// Columns lists what the index covers in order, separated by ", ". An entry can be an expression.
+	Columns string
+	Unique  bool
+	Primary bool
+}
+
+type ForeignKey struct {
+	Name string
+	// Columns and RefColumns list the columns in matching order, separated by ", ".
+	Columns    string
+	RefSchema  string
+	RefTable   string
+	RefColumns string
 }
 
 // Results streams the results of a Query, one statement at a time.

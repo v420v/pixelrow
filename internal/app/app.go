@@ -33,6 +33,10 @@ type tab struct {
 	table string
 	title string
 	pane  *QueryPane
+	// structure is nil for a blank query.
+	structure *structure
+	// view is 0 for the rows and 1 for the structure.
+	view int
 }
 
 func New(drivers map[string]driver.Driver, configPath string, update func(fn func()), openFile func(path string) error) *App {
@@ -96,8 +100,29 @@ func (a *App) tabsView(c *ui.Context) {
 		ui.Divider(c)
 		// The key gives each tab its own editor and table state.
 		tb := a.tabs[a.active]
-		c.Key(tb.id)
-		ui.Column(c).Grow(1).FillWidth().Children(func() { tb.pane.View(c) })
+		if tb.structure != nil {
+			ui.Row(c).FillWidth().Padding(t.Space(1), t.Space(2)).Gap(t.Space(1)).Children(func() {
+				for view, button := range []struct {
+					icon  *ui.SVG
+					label string
+				}{{iconRows, "Data"}, {iconFields, "Structure"}} {
+					build := iconButton
+					if tb.view == view {
+						build = primaryIconButton
+					}
+					build(c, button.icon, button.label).OnClick(func() { tb.view = view })
+				}
+			})
+			ui.Divider(c)
+		}
+		c.Key([2]int{tb.id, tb.view})
+		ui.Column(c).Grow(1).FillWidth().Children(func() {
+			if tb.structure != nil && tb.view == 1 {
+				tb.structure.view(c)
+			} else {
+				tb.pane.View(c)
+			}
+		})
 	})
 	if closing >= 0 {
 		a.closeTab(closing)
@@ -128,6 +153,12 @@ func (a *App) openTable(conn, schema, table string) {
 		}
 	}
 	tb := a.addTab(conn, key, table)
+	tb.structure = &structure{
+		dial:   func(ctx context.Context) (driver.Conn, error) { return a.connections.dial(ctx, conn) },
+		update: a.update,
+		schema: schema,
+		table:  table,
+	}
 	tb.pane.SetText(sql)
 	tb.pane.Run(sql)
 }

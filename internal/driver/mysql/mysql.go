@@ -126,6 +126,102 @@ func (c *conn) Tables(ctx context.Context, schema string) ([]driver.Table, error
 	return tables, wrapErr(ctx, rows.Err())
 }
 
+func (c *conn) Describe(ctx context.Context, schema, table string) (*driver.TableInfo, error) {
+	info := &driver.TableInfo{}
+
+	rows, err := c.sc.QueryContext(ctx, `
+		SELECT column_name, column_type, is_nullable = 'YES', column_default, column_key = 'PRI'
+		FROM information_schema.columns
+		WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`, schema, table)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	for rows.Next() {
+		var col driver.ColumnInfo
+		var def sql.NullString
+		if err := rows.Scan(&col.Name, &col.Type, &col.Nullable, &def, &col.PrimaryKey); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		col.Default = driver.Value{Text: def.String, Null: !def.Valid}
+		info.Columns = append(info.Columns, col)
+	}
+	if err := closeRows(ctx, rows); err != nil {
+		return nil, err
+	}
+
+	rows, err = c.sc.QueryContext(ctx, `
+		SELECT index_name, NOT non_unique, index_name = 'PRIMARY',
+			COALESCE(GROUP_CONCAT(COALESCE(column_name, expression) ORDER BY seq_in_index SEPARATOR ', '), '')
+		FROM information_schema.statistics
+		WHERE table_schema = ? AND table_name = ?
+		GROUP BY index_name, non_unique ORDER BY index_name = 'PRIMARY' DESC, index_name`, schema, table)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	for rows.Next() {
+		var idx driver.Index
+		if err := rows.Scan(&idx.Name, &idx.Unique, &idx.Primary, &idx.Columns); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		info.Indexes = append(info.Indexes, idx)
+	}
+	if err := closeRows(ctx, rows); err != nil {
+		return nil, err
+	}
+
+	rows, err = c.sc.QueryContext(ctx, `
+		SELECT constraint_name, GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ', '),
+			referenced_table_schema, referenced_table_name,
+			GROUP_CONCAT(referenced_column_name ORDER BY ordinal_position SEPARATOR ', ')
+		FROM information_schema.key_column_usage
+		WHERE table_schema = ? AND table_name = ? AND referenced_table_name IS NOT NULL
+		GROUP BY constraint_name, referenced_table_schema, referenced_table_name ORDER BY constraint_name`, schema, table)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	for rows.Next() {
+		var fk driver.ForeignKey
+		if err := rows.Scan(&fk.Name, &fk.Columns, &fk.RefSchema, &fk.RefTable, &fk.RefColumns); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		info.ForeignKeys = append(info.ForeignKeys, fk)
+	}
+	if err := closeRows(ctx, rows); err != nil {
+		return nil, err
+	}
+
+	// The statement is the second column for a table and for a view, whatever the columns after it.
+	ddl, err := c.sc.QueryContext(ctx, "SHOW CREATE TABLE "+Driver{}.QuoteIdent(schema)+"."+Driver{}.QuoteIdent(table))
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	if cols, _ := ddl.Columns(); len(cols) >= 2 && ddl.Next() {
+		dest := make([]any, len(cols))
+		raw := make([]sql.RawBytes, len(cols))
+		for i := range dest {
+			dest[i] = &raw[i]
+		}
+		if err := ddl.Scan(dest...); err != nil {
+			ddl.Close()
+			return nil, err
+		}
+		info.DDL = string(raw[1])
+	}
+	if err := closeRows(ctx, ddl); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func closeRows(ctx context.Context, rows *sql.Rows) error {
+	err := rows.Err()
+	rows.Close()
+	return wrapErr(ctx, err)
+}
+
 func (c *conn) Query(ctx context.Context, query string) (driver.Results, error) {
 	r := &results{ctx: ctx, c: c, done: make(chan struct{})}
 	r.run = context.WithoutCancel(ctx)
