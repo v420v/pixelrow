@@ -34,6 +34,8 @@ type QueryPane struct {
 
 	// conn is used only by the goroutine of the current run.
 	conn driver.Conn
+	// closed is set once the pane is no longer shown.
+	closed bool
 }
 
 // result represents the last result set produced by a single execution, or an error.
@@ -156,8 +158,28 @@ func (p *QueryPane) Run(sql string) {
 		cancel()
 		p.update(func() {
 			p.running, p.cancel, p.result = false, nil, r
+			if p.closed {
+				p.closeConn()
+			}
 		})
 	}()
+}
+
+// Close cancels the running query and closes the connection.
+func (p *QueryPane) Close() {
+	p.closed = true
+	if p.running {
+		p.cancelRun()
+		return
+	}
+	p.closeConn()
+}
+
+func (p *QueryPane) closeConn() {
+	if conn := p.conn; conn != nil {
+		p.conn = nil
+		go conn.Close()
+	}
 }
 
 func (p *QueryPane) cancelRun() {

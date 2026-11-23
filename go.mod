@@ -5,6 +5,7 @@ go 1.27.3
 tool github.com/egoist/mygo/cmd/mygo
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/egoist/mygo v0.10.0
 	github.com/jackc/pgx/v5 v5.13.0
 )

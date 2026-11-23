@@ -1,29 +1,16 @@
 package main
 
 import (
-	"cmp"
 	"log"
-	"os"
-	"strconv"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"db/internal/app"
+	"db/internal/config"
 	"db/internal/driver"
 	"db/internal/driver/postgres"
 )
-
-func envConfig() driver.Config {
-	port, _ := strconv.Atoi(cmp.Or(os.Getenv("DB_PORT"), "55432"))
-	return driver.Config{
-		Host:     cmp.Or(os.Getenv("DB_HOST"), "127.0.0.1"),
-		Port:     port,
-		User:     cmp.Or(os.Getenv("DB_USER"), "postgres"),
-		Password: cmp.Or(os.Getenv("DB_PASSWORD"), "postgres"),
-		Database: cmp.Or(os.Getenv("DB_NAME"), "postgres"),
-	}
-}
 
 func main() {
 	mygo.App.WhenReady(func() {
@@ -35,7 +22,12 @@ func main() {
 				win.Invalidate()
 			})
 		}
-		a := app.New(postgres.Driver{}, envConfig(), update)
+		path, err := config.Path()
+		if err != nil {
+			log.Fatal(err)
+		}
+		drivers := map[string]driver.Driver{"postgres": postgres.Driver{}}
+		a := app.New(drivers, path, update, mygo.Shell.OpenPath)
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "db client",
 			Width:   1280,
@@ -47,4 +39,3 @@ func main() {
 		log.Fatal(err)
 	}
 }
-

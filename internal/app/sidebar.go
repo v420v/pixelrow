@@ -12,8 +12,8 @@ import (
 
 // sidebar is a tree of the connected database's schemas and their tables.
 type sidebar struct {
-	open   func(ctx context.Context) (driver.Conn, error)
-	update func(fn func())
+	open    func(ctx context.Context) (driver.Conn, error)
+	update  func(fn func())
 	onTable func(schema, table string)
 
 	started  bool
@@ -22,8 +22,9 @@ type sidebar struct {
 	schemas  []*schemaNode
 	selected string
 
-	mu   sync.Mutex
-	conn driver.Conn
+	mu     sync.Mutex
+	conn   driver.Conn
+	closed bool
 }
 
 type schemaNode struct {
@@ -42,7 +43,7 @@ func (s *sidebar) view(c *ui.Context) {
 		s.loadSchemas()
 	}
 
-	ui.Column(c).Fill().Children(func() {
+	ui.Column(c).Grow(1).FillWidth().Children(func() {
 		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Schemas").Bold().SingleLine()
 			ui.Spacer(c)
@@ -164,6 +165,9 @@ func (s *sidebar) withConn(fn func(ctx context.Context, conn driver.Conn) error)
 	defer s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if s.closed {
+		return context.Canceled
+	}
 	if s.conn == nil {
 		conn, err := s.open(ctx)
 		if err != nil {
@@ -177,5 +181,18 @@ func (s *sidebar) withConn(fn func(ctx context.Context, conn driver.Conn) error)
 		s.conn = nil
 	}
 	return err
+}
+
+// close waits for any ongoing load to finish before closing the connection.
+func (s *sidebar) close() {
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closed = true
+		if s.conn != nil {
+			s.conn.Close()
+			s.conn = nil
+		}
+	}()
 }
 
