@@ -14,12 +14,12 @@ import (
 
 // connections is the tree of the config file's connections, each holding its schemas and tables once opened.
 type connections struct {
-	path    string
-	drivers map[string]driver.Driver
-	update  func(fn func())
+	path     string
+	drivers  map[string]driver.Driver
+	update   func(fn func())
 	openFile func(path string) error
-	onQuery func(conn string)
-	onTable func(conn, schema, table string)
+	onQuery  func(conn string)
+	onTable  func(conn, schema, table string)
 	// onDisconnect is called after a connection is disconnected, or changed or removed in the config file.
 	onDisconnect func(conn string)
 
@@ -27,7 +27,7 @@ type connections struct {
 	nodes   []*connNode
 	loadErr error
 	// selected is the name of the connection new queries open on.
-	selected string
+	selected      string
 	selectedTable string
 	fileErr       error
 

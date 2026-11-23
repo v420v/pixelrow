@@ -3,7 +3,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
@@ -19,7 +18,7 @@ type App struct {
 	connections  *connections
 	sidebarWidth float32
 
-	tabs []*tab
+	tabs   []*tab
 	active int
 	// ids counts the tabs opened, and queries those opened as blank queries, to tell them apart.
 	ids     int
@@ -119,7 +118,7 @@ func (a *App) openTable(conn, schema, table string) {
 	if drv == nil {
 		return
 	}
-	sql := fmt.Sprintf("SELECT * FROM %s.%s LIMIT %d", drv.QuoteIdent(schema), drv.QuoteIdent(table), maxRows)
+	sql := "SELECT * FROM " + drv.QuoteIdent(schema) + "." + drv.QuoteIdent(table)
 	key := schema + "\x00" + table
 	for i, tb := range a.tabs {
 		if tb.conn == conn && tb.table == key {
@@ -161,4 +160,3 @@ func (a *App) disconnected(conn string) {
 		}
 	}
 }
-

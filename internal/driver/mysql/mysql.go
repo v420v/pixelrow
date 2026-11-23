@@ -52,6 +52,11 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 		c.Close()
 		return nil, wrapErr(ctx, err)
 	}
+	// A result read a page at a time waits between reads, and the server drops a client it cannot write to for this long.
+	if _, err := sc.ExecContext(ctx, "SET SESSION net_write_timeout = 600"); err != nil {
+		c.Close()
+		return nil, wrapErr(ctx, err)
+	}
 	return c, nil
 }
 
@@ -150,7 +155,7 @@ func (c *conn) kill() {
 }
 
 type results struct {
-	ctx context.Context
+	ctx  context.Context
 	run  context.Context
 	c    *conn
 	rows *sql.Rows
@@ -327,4 +332,3 @@ func kindOf(name string) driver.ColumnKind {
 	}
 	return driver.KindText
 }
-

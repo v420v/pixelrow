@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -14,8 +15,18 @@ import (
 	"db/internal/driver"
 )
 
-// maxRows is how many rows of a result are kept and shown.
+// maxRows is how many rows are kept of a result that is read to its end.
 const maxRows = 1000
+
+const (
+	// pageSize is how many rows of a streamed result are read at a time.
+	pageSize = 500
+	// loadAhead is how many rows before the last one loaded the table shows when the next page is read.
+	loadAhead = 100
+	// idleLimit is how long a streamed result stays open without being read.
+	// An open result holds its locks on the server, so it is not left open for good.
+	idleLimit = 5 * time.Minute
+)
 
 // QueryPane is a SQL editor with the result of its last run below it.
 type QueryPane struct {
@@ -35,8 +46,9 @@ type QueryPane struct {
 	result  *result
 	runs    int
 
-	// conn is used only by the goroutine of the current run.
-	conn driver.Conn
+	// session is held by the goroutine using conn or a result's stream.
+	session sync.Mutex
+	conn    driver.Conn
 	// closing is set when the connection is to be closed once the running query ends.
 	closing bool
 }
@@ -45,11 +57,19 @@ type QueryPane struct {
 type result struct {
 	columns []ui.TableColumn
 	rows    [][]driver.Value
-	// total counts the rows of the result set, including those past maxRows that were not kept.
+	// total counts the rows of a result read to its end, including those past maxRows that were not kept.
 	total   int
 	command string
 	elapsed time.Duration
 	err     error
+
+	// stream is the result still open on the server, while rows remain to read.
+	stream driver.Results
+	// loading is set while the next page is being read.
+	loading bool
+	// stopped is set when the stream was closed before its last row.
+	stopped bool
+	idle    *time.Timer
 
 	table ui.ListState
 	// id keys the table so that each result starts with fresh scroll and column state.
@@ -79,8 +99,8 @@ func (p *QueryPane) View(c *ui.Context) {
 
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			primaryIconButton(c, iconRun, "Run").Disabled(p.running).OnClick(p.run)
-			if p.running {
+			primaryIconButton(c, iconRun, "Run").Disabled(p.busy()).OnClick(p.run)
+			if p.busy() {
 				iconButton(c, iconStop, "Cancel").OnClick(p.cancelRun)
 			}
 			if p.Connection != "" {
@@ -103,11 +123,15 @@ func (p *QueryPane) resultView(c *ui.Context) {
 	t := c.Theme()
 	r := p.result
 	switch {
-	case r == nil || r.err != nil || len(r.columns) == 0:
+	case r == nil || len(r.columns) == 0:
 		ui.Column(c).Fill()
 	default:
 		c.Key(r.id)
 		ui.Table(c, &r.table, r.columns, len(r.rows), func(row, col int) {
+			// The table builds only the rows in view, so building one near the end means the user scrolled there.
+			if col == 0 && row >= len(r.rows)-loadAhead {
+				p.loadMore()
+			}
 			v := r.rows[row][col]
 			text := ui.Text(c, v.Text)
 			if v.Null {
@@ -133,6 +157,9 @@ func (p *QueryPane) statusView(c *ui.Context) {
 		case r.err != nil:
 			ui.Text(c, errorText(r.err)).TextColor(t.Danger).Selectable()
 		default:
+			if r.loading {
+				ui.Spinner(c)
+			}
 			ui.Text(c, r.summary()).TextColor(t.TextMuted)
 		}
 	})
@@ -149,25 +176,111 @@ func (p *QueryPane) run() {
 
 // Run executes sql and shows its result, leaving the editor's text as it is.
 func (p *QueryPane) Run(sql string) {
-	if p.running || strings.TrimSpace(sql) == "" {
+	if p.busy() || strings.TrimSpace(sql) == "" {
 		return
 	}
 
+	// The rows left unread of the result shown are given up.
+	old, oldCancel := p.detachStream()
 	ctx, cancel := context.WithCancel(context.Background())
 	p.running, p.cancel = true, cancel
 	p.runs++
 	id := p.runs
 	go func() {
+		p.session.Lock()
+		if old != nil {
+			oldCancel()
+			old.Close()
+		}
 		r := p.execute(ctx, sql)
+		p.session.Unlock()
 		r.id = id
-		cancel()
 		p.update(func() {
-			p.running, p.cancel, p.result = false, nil, r
-			if p.closing {
-				p.closing = false
-				p.closeConn()
-			}
+			p.running, p.result = false, r
+			p.settle(r)
 		})
+	}()
+}
+
+// busy reports whether a query is running or a page is being read.
+func (p *QueryPane) busy() bool {
+	return p.running || p.result != nil && p.result.loading
+}
+
+// settle follows a run or a page read: an open stream waits for the next read, and anything else ends the query.
+func (p *QueryPane) settle(r *result) {
+	switch {
+	case p.closing:
+		p.closing = false
+		p.closeConn()
+	case r.stream != nil:
+		r.idle = time.AfterFunc(idleLimit, func() {
+			p.update(func() {
+				if p.result == r && !p.busy() {
+					p.stopStream()
+				}
+			})
+		})
+	default:
+		p.cancelRun()
+		p.cancel = nil
+	}
+}
+
+// loadMore reads the next page of the result shown.
+func (p *QueryPane) loadMore() {
+	r := p.result
+	if p.running || r == nil || r.stream == nil || r.loading {
+		return
+	}
+	r.loading = true
+	r.idle.Stop()
+	res := r.stream
+	go func() {
+		p.session.Lock()
+		var page [][]driver.Value
+		var command string
+		var err error
+		done := readPage(res, &page)
+		if done {
+			command, err = finish(res)
+			p.dropDeadConn(err)
+		}
+		p.session.Unlock()
+		p.update(func() {
+			r.rows = append(r.rows, page...)
+			r.loading = false
+			if done {
+				r.stream, r.command, r.err = nil, command, err
+			}
+			p.settle(r)
+		})
+	}()
+}
+
+// detachStream takes the open stream of the result shown, with the cancel of its query, for the caller to close.
+func (p *QueryPane) detachStream() (driver.Results, context.CancelFunc) {
+	r := p.result
+	if r == nil || r.stream == nil {
+		return nil, nil
+	}
+	res, cancel := r.stream, p.cancel
+	r.stream, r.stopped, p.cancel = nil, true, nil
+	r.idle.Stop()
+	return res, cancel
+}
+
+// stopStream gives up the rows left unread of the result shown.
+func (p *QueryPane) stopStream() {
+	res, cancel := p.detachStream()
+	if res == nil {
+		return
+	}
+	go func() {
+		p.session.Lock()
+		defer p.session.Unlock()
+		cancel()
+		res.Close()
 	}()
 }
 
@@ -178,7 +291,7 @@ func (p *QueryPane) SetText(sql string) {
 // Close cancels the running query and closes the connection.
 // The pane connects again if it runs another query.
 func (p *QueryPane) Close() {
-	if p.running {
+	if p.busy() {
 		p.closing = true
 		p.cancelRun()
 		return
@@ -187,10 +300,23 @@ func (p *QueryPane) Close() {
 }
 
 func (p *QueryPane) closeConn() {
-	if conn := p.conn; conn != nil {
-		p.conn = nil
-		go conn.Close()
+	res, cancel := p.detachStream()
+	conn := p.conn
+	p.conn = nil
+	if res == nil && conn == nil {
+		return
 	}
+	go func() {
+		p.session.Lock()
+		defer p.session.Unlock()
+		if res != nil {
+			cancel()
+			res.Close()
+		}
+		if conn != nil {
+			conn.Close()
+		}
+	}()
 }
 
 func (p *QueryPane) cancelRun() {
@@ -204,11 +330,18 @@ func (p *QueryPane) execute(ctx context.Context, sql string) *result {
 	r := &result{}
 	r.err = p.read(ctx, sql, r)
 	r.elapsed = time.Since(start)
-	if r.err != nil && p.conn != nil && !p.alive() {
+	if r.stream == nil {
+		p.dropDeadConn(r.err)
+	}
+	return r
+}
+
+// dropDeadConn closes the connection if err came from losing it, so that the next run connects again.
+func (p *QueryPane) dropDeadConn(err error) {
+	if err != nil && p.conn != nil && !p.alive() {
 		p.conn.Close()
 		p.conn = nil
 	}
-	return r
 }
 
 func (p *QueryPane) read(ctx context.Context, sql string, r *result) error {
@@ -223,15 +356,11 @@ func (p *QueryPane) read(ctx context.Context, sql string, r *result) error {
 	if err != nil {
 		return err
 	}
+	if streamable(sql) {
+		return readFirst(res, r)
+	}
 	for res.NextResultSet() {
-		cols := res.Columns()
-		r.columns = make([]ui.TableColumn, len(cols))
-		for i, col := range cols {
-			r.columns[i] = ui.TableColumn{Title: col.Name, ID: strconv.Itoa(i), Width: 160, MinWidth: 40}
-			if col.Kind == driver.KindNumber {
-				r.columns[i].Align = ui.End
-			}
-		}
+		r.setColumns(res.Columns())
 		r.rows, r.total = nil, 0
 		for res.Next() {
 			if r.total < maxRows {
@@ -242,6 +371,50 @@ func (p *QueryPane) read(ctx context.Context, sql string, r *result) error {
 		r.command = res.Command()
 	}
 	return res.Close()
+}
+
+// readFirst reads the first page of a streamable query, and leaves the result open in r.stream when rows remain.
+func readFirst(res driver.Results, r *result) error {
+	if !res.NextResultSet() {
+		return res.Close()
+	}
+	r.setColumns(res.Columns())
+	if !readPage(res, &r.rows) {
+		r.stream = res
+		return nil
+	}
+	var err error
+	r.command, err = finish(res)
+	return err
+}
+
+// readPage appends the next rows of res to rows, and reports whether they were its last.
+func readPage(res driver.Results, rows *[][]driver.Value) (done bool) {
+	for range pageSize {
+		if !res.Next() {
+			return true
+		}
+		*rows = append(*rows, res.Row())
+	}
+	return false
+}
+
+// finish closes res after its last row.
+func finish(res driver.Results) (command string, err error) {
+	command = res.Command()
+	for res.NextResultSet() {
+	}
+	return command, res.Close()
+}
+
+func (r *result) setColumns(cols []driver.Column) {
+	r.columns = make([]ui.TableColumn, len(cols))
+	for i, col := range cols {
+		r.columns[i] = ui.TableColumn{Title: col.Name, ID: strconv.Itoa(i), Width: 160, MinWidth: 40}
+		if col.Kind == driver.KindNumber {
+			r.columns[i].Align = ui.End
+		}
+	}
 }
 
 func (p *QueryPane) alive() bool {
@@ -260,10 +433,14 @@ func (r *result) summary() string {
 		}
 	case r.total > len(r.rows):
 		s = fmt.Sprintf("Showing first %s of %s rows", group(len(r.rows)), group(r.total))
-	case r.total == 1:
+	case r.stream != nil:
+		s = group(len(r.rows)) + "+ rows"
+	case r.stopped:
+		s = fmt.Sprintf("First %s rows, reading stopped", group(len(r.rows)))
+	case len(r.rows) == 1:
 		s = "1 row"
 	default:
-		s = group(r.total) + " rows"
+		s = group(len(r.rows)) + " rows"
 	}
 	return s + " · " + formatElapsed(r.elapsed)
 }
