@@ -116,7 +116,6 @@ func (c *conn) names(ctx context.Context, sql string) ([]string, error) {
 	return names, nil
 }
 
-// read runs a parameterized query and returns all of its rows.
 func (c *conn) read(ctx context.Context, sql string, args ...string) ([][][]byte, error) {
 	params := make([][]byte, len(args))
 	for i, a := range args {

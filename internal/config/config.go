@@ -40,7 +40,6 @@ const template = `# Connections of the db client.
 # database = "postgres"
 `
 
-// Path returns the config file PATH
 func Path() (string, error) {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {

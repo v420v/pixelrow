@@ -3,7 +3,6 @@ package driver
 
 import "context"
 
-// Config describes where to connect.
 type Config struct {
 	Host     string
 	Port     int
@@ -12,11 +11,9 @@ type Config struct {
 	Database string
 }
 
-// Driver is the implementation for one kind of database.
 type Driver interface {
 	// Open establishes a connection. Canceling ctx aborts the attempt.
 	Open(ctx context.Context, cfg Config) (Conn, error)
-	// QuoteIdent quotes name for use as an identifier in SQL.
 	QuoteIdent(name string) string
 }
 
@@ -25,7 +22,6 @@ type Driver interface {
 type Conn interface {
 	Ping(ctx context.Context) error
 
-	// Databases returns the database names on the server.
 	Databases(ctx context.Context) ([]string, error)
 	// Schemas returns the schema names in the connected database.
 	Schemas(ctx context.Context) ([]string, error)
@@ -71,7 +67,6 @@ type Results interface {
 	NextResultSet() bool
 	// Columns returns the columns of the current result. Empty for statements that return no rows, such as UPDATE.
 	Columns() []Column
-	// Next advances to the next row.
 	Next() bool
 	// Row returns the current row. The caller may keep the returned slice.
 	Row() []Value
@@ -79,7 +74,6 @@ type Results interface {
 	Command() string
 	// RowsAffected returns the number of rows the current statement affected. Valid after Next returns false.
 	RowsAffected() int64
-	// Err returns the error that occurred while reading.
 	Err() error
 	// Close releases the Conn for the next operation and returns the same error as Err.
 	// If rows remain unread, it stops the running query.
@@ -98,7 +92,6 @@ const (
 	KindJSON
 )
 
-// Column is a column of a result.
 type Column struct {
 	Name string
 	// Type is the database's type name, such as "int4" or "timestamptz".
