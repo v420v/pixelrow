@@ -19,6 +19,9 @@ const maxRows = 1000
 
 // QueryPane is a SQL editor with the result of its last run below it.
 type QueryPane struct {
+	// Connection and Address name the database the pane runs on, shown beside the Run button.
+	Connection, Address string
+
 	// open connects to the database. It is called on the first run and after the connection is lost.
 	open func(ctx context.Context) (driver.Conn, error)
 	// update runs fn on the UI thread and redraws, as Window.Update does.
@@ -34,8 +37,8 @@ type QueryPane struct {
 
 	// conn is used only by the goroutine of the current run.
 	conn driver.Conn
-	// closed is set once the pane is no longer shown.
-	closed bool
+	// closing is set when the connection is to be closed once the running query ends.
+	closing bool
 }
 
 // result represents the last result set produced by a single execution, or an error.
@@ -53,7 +56,6 @@ type result struct {
 	id int
 }
 
-// NewQueryPane returns a pane that connects with open and posts results through update.
 func NewQueryPane(open func(ctx context.Context) (driver.Conn, error), update func(fn func())) *QueryPane {
 	buf := editor.NewBuffer("")
 	buf.SetLanguage(editor.LanguageNamed("SQL"))
@@ -71,16 +73,19 @@ func NewQueryPane(open func(ctx context.Context) (driver.Conn, error), update fu
 	}
 }
 
-// View builds the pane.
 func (p *QueryPane) View(c *ui.Context) {
 	t := c.Theme()
 	c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, p.run)
 
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.PrimaryButton(c, "Run").Disabled(p.running).OnClick(p.run)
+			primaryIconButton(c, iconRun, "Run").Disabled(p.running).OnClick(p.run)
 			if p.running {
-				ui.Button(c, "Cancel").OnClick(p.cancelRun)
+				iconButton(c, iconStop, "Cancel").OnClick(p.cancelRun)
+			}
+			if p.Connection != "" {
+				ui.Text(c, p.Connection).Bold().SingleLine()
+				ui.Text(c, p.Address).TextColor(t.TextMuted).SingleLine()
 			}
 		})
 		ui.Divider(c)
@@ -158,17 +163,23 @@ func (p *QueryPane) Run(sql string) {
 		cancel()
 		p.update(func() {
 			p.running, p.cancel, p.result = false, nil, r
-			if p.closed {
+			if p.closing {
+				p.closing = false
 				p.closeConn()
 			}
 		})
 	}()
 }
 
+func (p *QueryPane) SetText(sql string) {
+	p.editor.Buffer.Set(sql)
+}
+
 // Close cancels the running query and closes the connection.
+// The pane connects again if it runs another query.
 func (p *QueryPane) Close() {
-	p.closed = true
 	if p.running {
+		p.closing = true
 		p.cancelRun()
 		return
 	}
@@ -290,4 +301,3 @@ func formatElapsed(d time.Duration) string {
 	}
 	return fmt.Sprintf("%.2f s", d.Seconds())
 }
-

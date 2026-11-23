@@ -10,17 +10,17 @@ import (
 	"db/internal/driver"
 )
 
-// sidebar is a tree of the connected database's schemas and their tables.
-type sidebar struct {
-	open    func(ctx context.Context) (driver.Conn, error)
-	update  func(fn func())
-	onTable func(schema, table string)
+// browser loads the schemas and tables of one connection and builds their tree items.
+// It has a connection of its own, so the tree can load while queries run.
+type browser struct {
+	open   func(ctx context.Context) (driver.Conn, error)
+	update func(fn func())
 
-	started  bool
-	loading  bool
-	err      error
-	schemas  []*schemaNode
-	selected string
+	loading bool
+	// loaded is set once the schemas have been read, which also means the connection works.
+	loaded  bool
+	err     error
+	schemas []*schemaNode
 
 	mu     sync.Mutex
 	conn   driver.Conn
@@ -36,41 +36,29 @@ type schemaNode struct {
 	tables  []driver.Table
 }
 
-func (s *sidebar) view(c *ui.Context) {
+// items builds the tree items of the schemas, inside the item of their connection.
+// selected is the key of the table chosen in the whole tree, and prefix what the keys of this connection start with.
+func (b *browser) items(c *ui.Context, selected *string, prefix string, onTable func(schema, table string)) {
 	t := c.Theme()
-	if !s.started {
-		s.started = true
-		s.loadSchemas()
+	switch {
+	case b.err != nil:
+		ui.Text(c, errorText(b.err)).TextColor(t.Danger).Padding(t.Space(1), t.Space(2)).Selectable()
+	case len(b.schemas) > 0:
+		// Keep displaying known schemas while refreshing.
+	case !b.loaded:
+		ui.TreeItem(c, "Connecting…", nil, nil).Disabled(true)
+	default:
+		ui.TreeItem(c, "No schemas", nil, nil).Disabled(true)
 	}
-
-	ui.Column(c).Grow(1).FillWidth().Children(func() {
-		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Schemas").Bold().SingleLine()
-			ui.Spacer(c)
-			if s.loading {
-				ui.Spinner(c)
-			}
-			ui.Button(c, "Refresh").Disabled(s.loading).OnClick(s.loadSchemas)
-		})
-		ui.Divider(c)
-		if s.err != nil {
-			ui.Text(c, errorText(s.err)).TextColor(t.Danger).Padding(t.Space(2)).Selectable()
-			return
-		}
-		ui.Scroll(c).Grow(1).FillWidth().Children(func() {
-			ui.Tree(c, func() {
-				for _, n := range s.schemas {
-					s.schemaItem(c, n)
-				}
-			})
-		})
-	})
+	for _, n := range b.schemas {
+		b.schemaItem(c, n, selected, prefix, onTable)
+	}
 }
 
-func (s *sidebar) schemaItem(c *ui.Context, n *schemaNode) {
+func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, prefix string, onTable func(schema, table string)) {
 	t := c.Theme()
 	if n.open && !n.loaded && !n.loading && n.err == nil {
-		s.loadTables(n)
+		b.loadTables(n)
 	}
 	schema := ui.TreeItem(c, n.name, &n.open, func() {
 		switch {
@@ -84,8 +72,8 @@ func (s *sidebar) schemaItem(c *ui.Context, n *schemaNode) {
 			ui.TreeItem(c, "No tables", nil, nil).Disabled(true)
 		}
 		for _, table := range n.tables {
-			key := n.name + "\x00" + table.Name
-			item := ui.TreeItem(c, table.Name, nil, nil).Selected(s.selected == key)
+			key := prefix + "\x00" + n.name + "\x00" + table.Name
+			item := ui.TreeItem(c, table.Name, nil, nil).Selected(*selected == key)
 			switch table.Kind {
 			case driver.KindView:
 				item.Tooltip("View")
@@ -93,8 +81,8 @@ func (s *sidebar) schemaItem(c *ui.Context, n *schemaNode) {
 				item.Tooltip("Materialized view")
 			}
 			if item.Clicked() {
-				s.selected = key
-				s.onTable(n.name, table.Name)
+				*selected = key
+				onTable(n.name, table.Name)
 			}
 		}
 	})
@@ -104,95 +92,94 @@ func (s *sidebar) schemaItem(c *ui.Context, n *schemaNode) {
 	}
 }
 
-// loadSchemas refreshes the schema list while preserving their expanded state.
-func (s *sidebar) loadSchemas() {
-	if s.loading {
+// load reads the schema list, connecting first if needed, while preserving which schemas are open.
+func (b *browser) load() {
+	if b.loading {
 		return
 	}
-	s.loading = true
+	b.loading = true
 	go func() {
 		var names []string
-		err := s.withConn(func(ctx context.Context, conn driver.Conn) (err error) {
+		err := b.withConn(func(ctx context.Context, conn driver.Conn) (err error) {
 			names, err = conn.Schemas(ctx)
 			return err
 		})
-		s.update(func() {
-			s.loading, s.err = false, err
+		b.update(func() {
+			b.loading, b.err = false, err
 			if err == nil {
-				s.setSchemas(names)
+				b.setSchemas(names)
 			}
 		})
 	}()
 }
 
-func (s *sidebar) setSchemas(names []string) {
-	first := s.schemas == nil
+func (b *browser) setSchemas(names []string) {
+	first := !b.loaded
+	b.loaded = true
 	old := map[string]*schemaNode{}
-	for _, n := range s.schemas {
+	for _, n := range b.schemas {
 		old[n.name] = n
 	}
-	s.schemas = make([]*schemaNode, len(names))
+	b.schemas = make([]*schemaNode, len(names))
 	for i, name := range names {
 		n := old[name]
 		if n == nil {
 			n = &schemaNode{name: name}
 		}
 		n.loaded, n.err = false, nil
-		s.schemas[i] = n
+		b.schemas[i] = n
 	}
-	if first && len(s.schemas) > 0 {
-		s.schemas[0].open = true
+	if first && len(b.schemas) > 0 {
+		b.schemas[0].open = true
 	}
 }
 
-func (s *sidebar) loadTables(n *schemaNode) {
+func (b *browser) loadTables(n *schemaNode) {
 	n.loading = true
 	go func() {
 		var tables []driver.Table
-		err := s.withConn(func(ctx context.Context, conn driver.Conn) (err error) {
+		err := b.withConn(func(ctx context.Context, conn driver.Conn) (err error) {
 			tables, err = conn.Tables(ctx, n.name)
 			return err
 		})
-		s.update(func() {
+		b.update(func() {
 			n.loading, n.loaded, n.err, n.tables = false, err == nil, err, tables
 		})
 	}()
 }
 
-// withConn runs fn with the sidebar's connection, opening it if needed.
-func (s *sidebar) withConn(fn func(ctx context.Context, conn driver.Conn) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (b *browser) withConn(fn func(ctx context.Context, conn driver.Conn) error) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if s.closed {
+	if b.closed {
 		return context.Canceled
 	}
-	if s.conn == nil {
-		conn, err := s.open(ctx)
+	if b.conn == nil {
+		conn, err := b.open(ctx)
 		if err != nil {
 			return err
 		}
-		s.conn = conn
+		b.conn = conn
 	}
-	err := fn(ctx, s.conn)
-	if err != nil && s.conn.Ping(ctx) != nil {
-		s.conn.Close()
-		s.conn = nil
+	err := fn(ctx, b.conn)
+	if err != nil && b.conn.Ping(ctx) != nil {
+		b.conn.Close()
+		b.conn = nil
 	}
 	return err
 }
 
-// close waits for any ongoing load to finish before closing the connection.
-func (s *sidebar) close() {
+// close waits for any ongoing load to finish before closing the connection. The browser is not used again.
+func (b *browser) close() {
 	go func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.closed = true
-		if s.conn != nil {
-			s.conn.Close()
-			s.conn = nil
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.closed = true
+		if b.conn != nil {
+			b.conn.Close()
+			b.conn = nil
 		}
 	}()
 }
-

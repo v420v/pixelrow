@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
 
@@ -12,42 +12,35 @@ import (
 	"db/internal/driver"
 )
 
+// connections is the tree of the config file's connections, each holding its schemas and tables once opened.
 type connections struct {
 	path    string
 	drivers map[string]driver.Driver
 	update  func(fn func())
-	// openFile opens the config file in the user's editor.
 	openFile func(path string) error
-	// onConnect is called with the connection the user chose to open.
-	onConnect func(conn config.Connection)
+	onQuery func(conn string)
+	onTable func(conn, schema, table string)
+	// onDisconnect is called after a connection is disconnected, or changed or removed in the config file.
+	onDisconnect func(conn string)
 
 	loaded  bool
-	list    []config.Connection
+	nodes   []*connNode
 	loadErr error
-	rows    ui.ListState
-	// selected is the index of the connection shown, or -1 for none.
-	selected int
-	// shown is the index the status beside the buttons belongs to.
-	shown int
+	// selected is the name of the connection new queries open on.
+	selected string
+	selectedTable string
+	fileErr       error
 
-	status  string
-	failed  bool
-	testing bool
-	tests   int
+	// mu guards confs, which connections being opened read off the UI thread.
+	mu    sync.RWMutex
+	confs map[string]config.Connection
 }
 
-func newConnections(path string, drivers map[string]driver.Driver, update func(fn func()), openFile func(string) error, onConnect func(config.Connection)) *connections {
-	s := &connections{
-		path: path,
-		drivers: drivers,
-		update: update,
-		openFile: openFile,
-		onConnect: onConnect,
-		selected: -1,
-		shown: -1,
-	}
-	s.rows.Selected = &s.selected
-	return s
+type connNode struct {
+	conf config.Connection
+	open bool
+	// browser is nil while the connection is not opened.
+	browser *browser
 }
 
 func (s *connections) view(c *ui.Context) {
@@ -57,195 +50,189 @@ func (s *connections) view(c *ui.Context) {
 		s.reload()
 	}
 
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		ui.Column(c).Width(260).Children(func() {
-			ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Connections").Bold().SingleLine()
-				ui.Spacer(c)
-				ui.Button(c, "Reload").OnClick(s.reload)
-			})
-			ui.Divider(c)
-			if ui.List(c, &s.rows, len(s.list), func(i int) {
-				// Muted text does not show on the accent color of the chosen row.
-				muted := t.TextMuted
-				if i == s.selected {
-					muted = t.AccentText.Alpha(0.75)
-				}
-				ui.Column(c).Padding(t.Space(2)).Gap(2).Children(func() {
-					ui.Text(c, s.list[i].Name).SingleLine()
-					ui.Text(c, address(s.list[i])).TextColor(muted).FontSize(12).SingleLine()
-				})
-			}).Grow(1).FillWidth().Submitted() {
-				s.connect()
-			}
+	ui.Column(c).Fill().Children(func() {
+		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Connections").Bold().SingleLine()
+			ui.Spacer(c)
+			iconButton(c, iconFile, "Open Config File").Tooltip("Open " + s.path).OnClick(s.openConfig)
+			iconButton(c, iconReload, "Reload").Tooltip("Read the config file again").OnClick(s.reload)
 		})
 		ui.Divider(c)
-		ui.Column(c).Grow(1).Padding(t.Space(6)).Gap(t.Space(4)).Children(func() {
-			s.detailsView(c)
+		ui.Scroll(c).Grow(1).FillWidth().Children(func() {
+			switch {
+			case s.loadErr != nil:
+				ui.Text(c, "The config file could not be read: "+s.loadErr.Error()).TextColor(t.Danger).Padding(t.Space(2)).Selectable()
+			case len(s.nodes) == 0:
+				ui.Text(c, "No connections yet. Add a [connections.<name>] table to the config file, then reload.").TextColor(t.TextMuted).Padding(t.Space(2))
+			}
+			ui.Tree(c, func() {
+				for _, n := range s.nodes {
+					s.connItem(c, n)
+				}
+			})
 		})
+		if s.fileErr != nil {
+			ui.Divider(c)
+			ui.Text(c, "Could not open the config file: "+s.fileErr.Error()).TextColor(t.Danger).FontSize(11).Padding(t.Space(2))
+		}
 	})
 }
 
-func (s *connections) detailsView(c *ui.Context) {
-	t := c.Theme()
-	if s.selected != s.shown {
-		s.shown = s.selected
-		s.tests++
-		s.testing = false
-		s.setStatus("", false)
+func (s *connections) connItem(c *ui.Context, n *connNode) {
+	name := n.conf.Name
+	// Opening the item connects, and closing one that failed lets the next opening try again.
+	if n.open && n.browser == nil {
+		s.connect(n)
+	}
+	if !n.open && n.browser != nil && n.browser.err != nil {
+		n.browser.close()
+		n.browser = nil
 	}
 
-	switch {
-	case s.loadErr != nil:
-		ui.Text(c, "The config file could not be read").FontSize(20).Bold()
-		ui.Text(c, s.loadErr.Error()).TextColor(t.Danger).Selectable()
-	case len(s.list) == 0:
-		ui.Text(c, "No connections yet").FontSize(20).Bold()
-		ui.Text(c, "Add a [connections.<name>] table to the config file, then reload.").TextColor(t.TextMuted)
-	case s.selected < 0 || s.selected >= len(s.list):
-		ui.Text(c, "Choose a connection").FontSize(20).Bold()
-	default:
-		s.connectionView(c, s.list[s.selected])
-	}
-
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, s.path).TextColor(t.TextMuted).FontSize(12).Selectable()
-		ui.Button(c, "Open Config File").OnClick(s.openConfig)
-	})
-}
-
-func (s *connections) connectionView(c *ui.Context, conn config.Connection) {
-	t := c.Theme()
-	ui.Text(c, conn.Name).FontSize(20).Bold().SingleLine()
-
-	password := "Not set"
-	if conn.Password != "" {
-		password = "••••••••"
-	}
-	port := "Default"
-	if conn.Port != 0 {
-		port = strconv.Itoa(conn.Port)
-	}
-	fields := [][2]string{
-		{"Kind", conn.Kind}, {"Host", conn.Host}, {"Port", port},
-		{"User", conn.User}, {"Password", password}, {"Database", conn.Database},
-	}
-	ui.Column(c).Gap(t.Space(2)).Children(func() {
-		for _, f := range fields {
-			ui.Row(c).Gap(t.Space(3)).Children(func() {
-				ui.Text(c, f[0]).TextColor(t.TextMuted).Width(80)
-				ui.Text(c, f[1]).Selectable()
+	chosen := s.selected == name && s.selectedTable == ""
+	item := ui.TreeItem(c, name, &n.open, func() {
+		if n.browser != nil {
+			n.browser.items(c, &s.selectedTable, name, func(schema, table string) {
+				s.selected = name
+				s.onTable(name, schema, table)
 			})
 		}
+	}).Selected(chosen).Tooltip(n.conf.Kind + " · " + address(n.conf))
+	t := c.Theme()
+	dot, state := t.Border, "Not connected"
+	switch {
+	case n.connected():
+		dot, state = t.Success, "Connected"
+	case n.browser != nil && n.browser.err != nil:
+		dot, state = t.Danger, "Could not connect"
+	case n.browser != nil:
+		dot, state = t.Warning, "Connecting"
+	}
+	item.Children(func() {
+		ui.Spacer(c)
+		ui.Column(c).Width(8).Height(8).Radius(4).Shrink(0).Background(dot).Label(name + ": " + state)
 	})
 
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.PrimaryButton(c, "Connect").OnClick(s.connect)
-		ui.Button(c, "Test").Disabled(s.testing).OnClick(s.test)
-		switch {
-		case s.testing:
-			ui.Spinner(c)
-			ui.Text(c, "Connecting…").TextColor(t.TextMuted)
-		case s.status != "":
-			color := t.TextMuted
-			if s.failed {
-				color = t.Danger
-			}
-			ui.Text(c, s.status).TextColor(color).Selectable()
+	var disconnect, refresh bool
+	item.ContextMenu(func(m *ui.Menu) {
+		if m.Item("New Query").Chosen() {
+			s.selected, s.selectedTable = name, ""
+			s.onQuery(name)
+		}
+		m.Separator()
+		if m.Item("Refresh").Disabled(n.browser == nil).Chosen() {
+			refresh = true
+		}
+		if m.Item("Disconnect").Disabled(n.browser == nil).Chosen() {
+			disconnect = true
 		}
 	})
+	switch {
+	case disconnect:
+		s.disconnect(n)
+	case refresh:
+		n.browser.load()
+	case item.Clicked():
+		// A click on the name chooses the connection and opens it, not only its arrow.
+		s.selected, s.selectedTable = name, ""
+		n.open = !n.open
+	}
 }
 
-// reload reads the config file again, keeping the connection chosen by its name.
-func (s *connections) reload() {
-	var chosen string
-	if s.selected >= 0 && s.selected < len(s.list) {
-		chosen = s.list[s.selected].Name
+// connected reports whether the connection has been opened and answered.
+func (n *connNode) connected() bool { return n.browser != nil && n.browser.loaded }
+
+func (s *connections) connect(n *connNode) {
+	name := n.conf.Name
+	n.browser = &browser{
+		open:   func(ctx context.Context) (driver.Conn, error) { return s.dial(ctx, name) },
+		update: s.update,
 	}
+	n.browser.load()
+}
+
+func (s *connections) disconnect(n *connNode) {
+	if n.browser != nil {
+		n.browser.close()
+		n.browser = nil
+	}
+	n.open = false
+	s.onDisconnect(n.conf.Name)
+}
+
+// reload reads the config file again. Connections it changed or removed are disconnected.
+func (s *connections) reload() {
+	// A first run leaves an example to start from.
 	if err := config.Create(s.path); err != nil {
-		s.list, s.loadErr, s.selected = nil, err, -1
+		s.loadErr = err
 		return
 	}
-	s.list, s.loadErr = config.Load(s.path)
-	s.selected, s.shown = -1, -1
-	s.rows = ui.ListState{Selected: &s.selected}
-	for i, conn := range s.list {
-		if conn.Name == chosen {
-			s.selected = i
-		}
+	list, err := config.Load(s.path)
+	s.loadErr = err
+	if err != nil {
+		// The connections already open stay as they are until the file reads again.
+		return
 	}
-	if s.selected < 0 && len(s.list) > 0 {
-		s.selected = 0
+
+	old := map[string]*connNode{}
+	for _, n := range s.nodes {
+		old[n.conf.Name] = n
+	}
+	confs := map[string]config.Connection{}
+	nodes := make([]*connNode, len(list))
+	for i, conf := range list {
+		confs[conf.Name] = conf
+		n := old[conf.Name]
+		if n != nil && n.conf == conf {
+			delete(old, conf.Name)
+		} else {
+			n = &connNode{conf: conf}
+		}
+		nodes[i] = n
+	}
+	s.mu.Lock()
+	s.confs = confs
+	s.mu.Unlock()
+	s.nodes = nodes
+	for _, n := range old {
+		if n.browser != nil {
+			n.browser.close()
+		}
+		s.onDisconnect(n.conf.Name)
+	}
+	if _, ok := confs[s.selected]; !ok {
+		s.selected, s.selectedTable = "", ""
 	}
 }
 
 func (s *connections) openConfig() {
-	if err := s.openFile(s.path); err != nil {
-		s.setStatus("Could not open the config file: "+err.Error(), true)
+	s.fileErr = s.openFile(s.path)
+}
+
+// conf returns the connection named name as the config file last had it. It is safe from any goroutine.
+func (s *connections) conf(name string) (config.Connection, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	conf, ok := s.confs[name]
+	return conf, ok
+}
+
+// dial opens a session on the connection named name. It runs off the UI thread.
+func (s *connections) dial(ctx context.Context, name string) (driver.Conn, error) {
+	conf, ok := s.conf(name)
+	if !ok {
+		return nil, fmt.Errorf("connection %q is no longer in the config file", name)
 	}
-}
-
-func (s *connections) setStatus(text string, failed bool) {
-	s.status, s.failed = text, failed
-}
-
-// test connects to the chosen connection once and reports how it went.
-func (s *connections) test() {
-	if s.selected < 0 || s.selected >= len(s.list) {
-		return
-	}
-	conn := s.list[s.selected]
-	s.testing = true
-	s.tests++
-	id := s.tests
-	go func() {
-		start := time.Now()
-		err := ping(s.drivers, conn)
-		elapsed := time.Since(start)
-		s.update(func() {
-			if id != s.tests {
-				return
-			}
-			s.testing = false
-			if err != nil {
-				s.setStatus(errorText(err), true)
-			} else {
-				s.setStatus("Connected in "+formatElapsed(elapsed)+".", false)
-			}
-		})
-	}()
-}
-
-func (s *connections) connect() {
-	if s.selected >= 0 && s.selected < len(s.list) {
-		s.onConnect(s.list[s.selected])
-	}
-}
-
-// ping opens conn once and closes it.
-func ping(drivers map[string]driver.Driver, conn config.Connection) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	c, err := open(ctx, drivers, conn)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	return c.Ping(ctx)
-}
-
-// open connects to conn.
-func open(ctx context.Context, drivers map[string]driver.Driver, conn config.Connection) (driver.Conn, error) {
-	drv := drivers[conn.Kind]
+	drv := s.drivers[conf.Kind]
 	if drv == nil {
-		return nil, fmt.Errorf("unknown kind %q of connection %q", conn.Kind, conn.Name)
+		return nil, fmt.Errorf("unknown kind %q of connection %q", conf.Kind, conf.Name)
 	}
 	return drv.Open(ctx, driver.Config{
-		Host:     conn.Host,
-		Port:     conn.Port,
-		User:     conn.User,
-		Password: conn.Password,
-		Database: conn.Database,
+		Host:     conf.Host,
+		Port:     conf.Port,
+		User:     conf.User,
+		Password: conf.Password,
+		Database: conf.Database,
 	})
 }
 
@@ -263,4 +250,3 @@ func address(conn config.Connection) string {
 	}
 	return s
 }
-
