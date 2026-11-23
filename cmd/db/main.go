@@ -39,6 +39,13 @@ func main() {
 			SaveFile: func(name string) (string, error) {
 				return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, DefaultPath: name})
 			},
+			ChooseFile: func() (string, error) {
+				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win})
+				if err != nil || len(paths) == 0 {
+					return "", err
+				}
+				return paths[0], nil
+			},
 		})
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "db client",

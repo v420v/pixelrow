@@ -12,13 +12,14 @@ import (
 
 	"db/internal/config"
 	"db/internal/driver"
-	"db/internal/dump"
+	"db/internal/tools"
 )
 
 // dumper asks what to dump, runs one dump at a time with the database's own tool, and shows how it goes at the foot of the sidebar.
 type dumper struct {
 	connections *connections
 	update      func(fn func())
+	jobs        *jobs
 	// saveFile asks where to save a file named name, and returns "" when the user cancels.
 	saveFile func(name string) (string, error)
 
@@ -27,24 +28,17 @@ type dumper struct {
 	form   *dumpForm
 	// programs keeps the path typed for each tool, for the next dump of this run of the app.
 	programs map[string]string
-
-	running bool
-	cancel  context.CancelFunc
-	label   string
-	written atomic.Int64
-	// last is the outcome of the dump that ended last, until dismissed.
-	last *dumpOutcome
 }
 
 type dumpForm struct {
 	conf config.Connection
-	tool *dump.Tool
+	tool *tools.Dumper
 	// schema is what to dump, and table narrows it to one table when not "".
 	schema string
 	table  string
 
 	program string
-	content dump.Content
+	content tools.Content
 	drop    bool
 	extras  []bool
 
@@ -56,17 +50,9 @@ type dumpForm struct {
 	err string
 }
 
-type dumpOutcome struct {
-	label string
-	path  string
-	bytes int64
-	err   error
-}
-
-// ask opens the dialog to dump schema on the connection named conn, or only table when it is not "".
 func (d *dumper) ask(conn, schema, table string) {
 	conf, ok := d.connections.conf(conn)
-	tool := dump.Tools[conf.Kind]
+	tool := tools.Dumpers[conf.Kind]
 	if !ok || tool == nil {
 		return
 	}
@@ -76,9 +62,9 @@ func (d *dumper) ask(conn, schema, table string) {
 	}
 	f.program = d.programs[tool.Name]
 	if f.program == "" {
-		program, err := dump.Find(tool.Name, d.connections.tools[tool.Name])
+		program, err := tools.Find(tool.Name, d.connections.tools[tool.Name])
 		if err != nil {
-			f.err = err.Error() + ". Enter its path below."
+			f.err = err.Error() + ". Enter its path."
 		}
 		f.program = program
 	}
@@ -115,7 +101,6 @@ func (d *dumper) listTables(conn, schema string) ([]driver.Table, error) {
 	return c.Tables(ctx, schema)
 }
 
-// dialog builds the dialog while it is asked for. It is built outside the sidebar, over the whole window.
 func (d *dumper) dialog(c *ui.Context) {
 	f := d.form
 	if f == nil {
@@ -134,9 +119,9 @@ func (d *dumper) dialog(c *ui.Context) {
 			}).Description("Set " + f.tool.Name + " under [tools] in the config file to keep a path.")
 
 			ui.RadioGroup(c, func() {
-				ui.Radio(c, &f.content, dump.StructureAndData, "Structure and data")
-				ui.Radio(c, &f.content, dump.StructureOnly, "Structure only")
-				ui.Radio(c, &f.content, dump.DataOnly, "Data only")
+				ui.Radio(c, &f.content, tools.StructureAndData, "Structure and data")
+				ui.Radio(c, &f.content, tools.StructureOnly, "Structure only")
+				ui.Radio(c, &f.content, tools.DataOnly, "Data only")
 			}).Label("Content")
 
 			ui.Column(c).Gap(t.Space(1)).Children(func() {
@@ -199,8 +184,8 @@ func (f *dumpForm) target() string {
 	return f.schema
 }
 
-func (f *dumpForm) options() (dump.Options, error) {
-	o := dump.Options{
+func (f *dumpForm) options() (tools.DumpOptions, bool) {
+	o := tools.DumpOptions{
 		Host:     f.conf.Host,
 		Port:     f.conf.Port,
 		User:     f.conf.User,
@@ -216,7 +201,7 @@ func (f *dumpForm) options() (dump.Options, error) {
 	}
 	if f.table != "" {
 		o.Tables = []string{f.table}
-		return o, nil
+		return o, true
 	}
 	// With every table chosen the schema is dumped as a whole, which also takes what belongs to no table.
 	all := true
@@ -231,28 +216,28 @@ func (f *dumpForm) options() (dump.Options, error) {
 	case all:
 		o.Tables = nil
 	case len(o.Tables) == 0:
-		return o, fmt.Errorf("Choose at least one table.")
+		return o, false
 	}
-	return o, nil
+	return o, true
 }
 
 func (d *dumper) start() {
 	f := d.form
-	if d.running {
-		f.err = "Another dump is still running."
+	if d.jobs.running != nil {
+		f.err = "Another dump or SQL file is still running."
 		return
 	}
 	f.program = strings.TrimSpace(f.program)
-	if _, err := dump.Find(f.tool.Name, f.program); err != nil || f.program == "" {
+	if _, err := tools.Find(f.tool.Name, f.program); err != nil || f.program == "" {
 		f.err = "Enter the path of " + f.tool.Name + "."
 		if err != nil && f.program != "" {
 			f.err = err.Error() + "."
 		}
 		return
 	}
-	o, err := f.options()
-	if err != nil {
-		f.err = err.Error()
+	o, ok := f.options()
+	if !ok {
+		f.err = "Choose at least one table."
 		return
 	}
 	path, err := d.saveFile(fileName(f.conf.Name+"-"+f.target()) + ".sql")
@@ -268,57 +253,16 @@ func (d *dumper) start() {
 	}
 	d.programs[f.tool.Name] = f.program
 
-	ctx, cancel := context.WithCancel(context.Background())
+	d.asking = false
 	label := f.target()
-	d.asking, d.running, d.cancel, d.label, d.last = false, true, cancel, label, nil
-	d.written.Store(0)
-	// The size written is read as the view builds, and this only asks for the frames that show it growing.
-	go func() {
-		tick := time.NewTicker(300 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				d.update(func() {})
-			}
-		}
-	}()
-	go func() {
-		n, err := f.tool.Run(ctx, f.program, path, o, &d.written)
-		cancel()
-		d.update(func() {
-			d.running, d.cancel = false, nil
-			d.last = &dumpOutcome{label: label, path: path, bytes: n, err: err}
-		})
-	}()
-}
-
-func (d *dumper) view(c *ui.Context) {
-	if !d.running && d.last == nil {
-		return
-	}
-	t := c.Theme()
-	ui.Divider(c)
-	ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		switch {
-		case d.running:
-			ui.Spinner(c)
-			ui.Text(c, "Dumping "+d.label+" · "+formatBytes(d.written.Load())).FontSize(12).TextColor(t.TextMuted).Grow(1)
-			iconButton(c, iconStop, "Cancel Dump").OnClick(d.cancel)
-		case d.last.err != nil:
-			// A tool can print many lines, of which the first says what went wrong.
-			msg := errorText(d.last.err)
-			first, _, _ := strings.Cut(msg, "\n")
-			ui.Text(c, "Dump failed: "+first).FontSize(12).TextColor(t.Danger).Grow(1).Tooltip(msg).Selectable()
-			iconButton(c, iconClose, "Dismiss").OnClick(func() { d.last = nil })
-		default:
-			status := fmt.Sprintf("Dumped %s to %s · %s", d.last.label, filepath.Base(d.last.path), formatBytes(d.last.bytes))
-			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted).Grow(1).Tooltip(d.last.path).Selectable()
-			iconButton(c, iconClose, "Dismiss").OnClick(func() { d.last = nil })
-		}
-	})
+	var written atomic.Int64
+	d.jobs.start("Dumping "+label,
+		func() (string, float64) { return formatBytes(written.Load()), -1 },
+		"Dump of "+label+" canceled.",
+		func(ctx context.Context) (string, string, error) {
+			n, err := f.tool.Run(ctx, f.program, path, o, &written)
+			return fmt.Sprintf("Dumped %s to %s · %s", label, filepath.Base(path), formatBytes(n)), path, err
+		}, nil)
 }
 
 // fileName replaces what a file name cannot hold everywhere.

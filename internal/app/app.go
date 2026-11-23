@@ -17,6 +17,8 @@ type App struct {
 
 	connections  *connections
 	dumper       *dumper
+	fileRunner   *fileRunner
+	jobs         *jobs
 	sidebarWidth float32
 
 	tabs   []*tab
@@ -50,6 +52,8 @@ type Options struct {
 	OpenFile func(path string) error
 	// SaveFile asks where to save a file named name, and returns "" when the user cancels.
 	SaveFile func(name string) (string, error)
+	// ChooseFile asks for a file to open, and returns "" when the user cancels.
+	ChooseFile func() (string, error)
 }
 
 func New(o Options) *App {
@@ -63,9 +67,12 @@ func New(o Options) *App {
 		onTable:      a.openTable,
 		onDisconnect: a.disconnected,
 	}
-	a.dumper = &dumper{connections: a.connections, update: o.Update, saveFile: o.SaveFile}
+	a.jobs = &jobs{update: o.Update}
+	a.dumper = &dumper{connections: a.connections, update: o.Update, jobs: a.jobs, saveFile: o.SaveFile}
+	a.fileRunner = &fileRunner{connections: a.connections, jobs: a.jobs, chooseFile: o.ChooseFile}
 	a.connections.onDump = a.dumper.ask
-	a.connections.footer = a.dumper.view
+	a.connections.onRunFile = a.fileRunner.ask
+	a.connections.footer = a.jobs.view
 	return a
 }
 
@@ -77,6 +84,7 @@ func (a *App) View(c *ui.Context) {
 	})
 	ui.Split(c, &a.sidebarWidth, func() { a.connections.view(c) }, func() { a.tabsView(c) }).Fill()
 	a.dumper.dialog(c)
+	a.fileRunner.dialog(c)
 }
 
 func (a *App) tabsView(c *ui.Context) {

@@ -40,10 +40,12 @@ const template = `# Connections of the db client.
 # password = "postgres"
 # database = "postgres"
 
-# Where the dump programs are, when the app does not find them by itself.
+# Where the programs that dump and that run SQL files are, when the app does not find them by itself.
 # [tools]
 # mysqldump = "/opt/homebrew/opt/mysql-client/bin/mysqldump"
+# mysql = "/opt/homebrew/opt/mysql-client/bin/mysql"
 # pg_dump = "/opt/homebrew/opt/libpq/bin/pg_dump"
+# psql = "/opt/homebrew/opt/libpq/bin/psql"
 `
 
 func Path() (string, error) {
@@ -82,7 +84,7 @@ type File struct {
 }
 
 // knownTools are the programs a [tools] table can place.
-var knownTools = []string{"mysqldump", "pg_dump"}
+var knownTools = []string{"mysqldump", "pg_dump", "mysql", "psql"}
 
 // A missing file is an empty one.
 func Load(path string) (File, error) {
@@ -109,7 +111,7 @@ func Load(path string) (File, error) {
 	}
 	for name := range file.Tools {
 		if !slices.Contains(knownTools, name) {
-			return File{}, fmt.Errorf("unknown tool %q: [tools] takes %s", name, strings.Join(knownTools, " and "))
+			return File{}, fmt.Errorf("unknown tool %q: [tools] takes %s", name, strings.Join(knownTools, ", "))
 		}
 	}
 

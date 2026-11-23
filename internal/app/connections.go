@@ -10,6 +10,7 @@ import (
 
 	"db/internal/config"
 	"db/internal/driver"
+	"db/internal/tools"
 )
 
 // connections is the tree of the config file's connections, each holding its schemas and tables once opened.
@@ -24,7 +25,9 @@ type connections struct {
 	onDisconnect func(conn string)
 	// onDump is called to dump table of schema, or the whole schema when table is "".
 	onDump func(conn, schema, table string)
-	footer func(c *ui.Context)
+	// onRunFile is called to run a SQL file on a connection, in database when it is not "".
+	onRunFile func(conn, database string)
+	footer    func(c *ui.Context)
 
 	loaded  bool
 	nodes   []*connNode
@@ -103,7 +106,8 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 					s.selected = name
 					s.onTable(name, schema, table)
 				},
-				dump: func(schema, table string) { s.onDump(name, schema, table) },
+				dump:    func(schema, table string) { s.onDump(name, schema, table) },
+				runFile: s.runFileIn(n),
 			})
 		}
 	}).Selected(chosen).Tooltip(n.conf.Kind + " · " + address(n.conf))
@@ -128,6 +132,9 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 			s.selected, s.selectedTable = name, ""
 			s.onQuery(name)
 		}
+		if m.Item("Run SQL File…").Chosen() {
+			s.onRunFile(name, "")
+		}
 		m.Separator()
 		if m.Item("Refresh").Disabled(n.browser == nil).Chosen() {
 			refresh = true
@@ -145,6 +152,22 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 		// A click on the name chooses the connection and opens it, not only its arrow.
 		s.selected, s.selectedTable = name, ""
 		n.open = !n.open
+	}
+}
+
+// runFileIn returns what runs a SQL file in a schema of n, or nil where a file cannot be aimed at one.
+func (s *connections) runFileIn(n *connNode) func(schema string) {
+	if client := tools.Clients[n.conf.Kind]; client == nil || !client.PerSchema {
+		return nil
+	}
+	return func(schema string) { s.onRunFile(n.conf.Name, schema) }
+}
+
+func (s *connections) refresh(conn string) {
+	for _, n := range s.nodes {
+		if n.conf.Name == conn && n.browser != nil {
+			n.browser.load()
+		}
 	}
 }
 

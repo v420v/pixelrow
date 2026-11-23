@@ -32,6 +32,8 @@ type treeActions struct {
 	openTable func(schema, table string)
 	// dump asks to dump table of schema, or the whole schema when table is "".
 	dump func(schema, table string)
+	// runFile asks to run a SQL file in schema. It is nil where a schema is not something a file can be aimed at.
+	runFile func(schema string)
 }
 
 type schemaNode struct {
@@ -105,6 +107,9 @@ func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, pre
 	schema.ContextMenu(func(m *ui.Menu) {
 		if m.Item("Dump Schema…").Chosen() {
 			actions.dump(n.name, "")
+		}
+		if actions.runFile != nil && m.Item("Run SQL File…").Chosen() {
+			actions.runFile(n.name)
 		}
 	})
 	// A click on the name opens the schema, not only its arrow.

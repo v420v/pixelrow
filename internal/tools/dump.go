@@ -1,5 +1,4 @@
-// Package dump writes a database to a SQL file with the database's own dump tool: mysqldump or pg_dump.
-package dump
+package tools
 
 import (
 	"bytes"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
@@ -23,7 +21,7 @@ const (
 	DataOnly
 )
 
-type Options struct {
+type DumpOptions struct {
 	Host     string
 	Port     int
 	User     string
@@ -51,16 +49,15 @@ type Extra struct {
 	WholeSchema bool
 }
 
-type Tool struct {
-	// Name is the program's file name, such as "pg_dump".
+type Dumper struct {
 	Name   string
 	Extras []Extra
 	// command returns the arguments and the environment for o. The password goes in the environment, never in the arguments, which other users of the machine can list.
-	command func(o Options) (args, env []string)
+	command func(o DumpOptions) (args, env []string)
 }
 
-// Tools maps a connection's kind to its tool.
-var Tools = map[string]*Tool{
+// Dumpers maps a connection's kind to the program that dumps it.
+var Dumpers = map[string]*Dumper{
 	"mysql":    {Name: "mysqldump", Extras: mysqlExtras, command: mysqldump},
 	"postgres": {Name: "pg_dump", Extras: pgExtras, command: pgDump},
 }
@@ -70,7 +67,7 @@ var mysqlExtras = []Extra{
 	{Key: "triggers", Label: "Triggers", Default: true},
 }
 
-func mysqldump(o Options) (args, env []string) {
+func mysqldump(o DumpOptions) (args, env []string) {
 	args = []string{
 		"--host=" + o.Host, "--user=" + o.User,
 		// One transaction gives a consistent copy of InnoDB tables without locking them.
@@ -105,7 +102,7 @@ var pgExtras = []Extra{
 	{Key: "owner", Label: "Owners and privileges"},
 }
 
-func pgDump(o Options) (args, env []string) {
+func pgDump(o DumpOptions) (args, env []string) {
 	args = []string{
 		"--host=" + o.Host, "--username=" + o.User, "--dbname=" + o.Database,
 		// Without a terminal nobody could answer a password prompt.
@@ -140,38 +137,9 @@ func pgName(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// A desktop app does not get the PATH of a shell, which is why PATH alone is not enough.
-func Find(name, configured string) (string, error) {
-	if configured != "" {
-		if _, err := os.Stat(configured); err != nil {
-			return "", fmt.Errorf("%s is not at %s", name, configured)
-		}
-		return configured, nil
-	}
-	if path, err := exec.LookPath(name); err == nil {
-		return path, nil
-	}
-	home, _ := os.UserHomeDir()
-	for _, dir := range []string{
-		"/opt/homebrew/bin", "/usr/local/bin",
-		"/opt/homebrew/opt/libpq/bin", "/usr/local/opt/libpq/bin",
-		"/opt/homebrew/opt/mysql-client/bin", "/usr/local/opt/mysql-client/bin",
-		"/Applications/Postgres.app/Contents/Versions/latest/bin",
-		"/usr/local/mysql/bin",
-		"/etc/profiles/per-user/" + os.Getenv("USER") + "/bin", "/run/current-system/sw/bin",
-		filepath.Join(home, ".nix-profile", "bin"),
-	} {
-		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("%s was not found", name)
-}
-
 // written, if not nil, is kept at the count of bytes written so far, for another goroutine to read.
 // A dump that fails or is canceled leaves no file.
-func (t *Tool) Run(ctx context.Context, program, path string, o Options, written *atomic.Int64) (int64, error) {
+func (t *Dumper) Run(ctx context.Context, program, path string, o DumpOptions, written *atomic.Int64) (int64, error) {
 	// The file takes its name only once it is whole, so a dump that failed is never mistaken for one that worked.
 	part := path + ".part"
 	f, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -191,7 +159,7 @@ func (t *Tool) Run(ctx context.Context, program, path string, o Options, written
 	return n, err
 }
 
-func (t *Tool) run(ctx context.Context, program string, out io.Writer, o Options, written *atomic.Int64) (int64, error) {
+func (t *Dumper) run(ctx context.Context, program string, out io.Writer, o DumpOptions, written *atomic.Int64) (int64, error) {
 	args, env := t.command(o)
 	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Env = append(os.Environ(), env...)
