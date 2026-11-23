@@ -225,15 +225,13 @@ func closeRows(ctx context.Context, rows *sql.Rows) error {
 func (c *conn) Query(ctx context.Context, query string) (driver.Results, error) {
 	r := &results{ctx: ctx, c: c, done: make(chan struct{})}
 	r.run = context.WithoutCancel(ctx)
-	r.watch.Add(1)
-	go func() {
-		defer r.watch.Done()
+	r.watch.Go(func() {
 		select {
 		case <-ctx.Done():
 			c.kill()
 		case <-r.done:
 		}
-	}()
+	})
 	rows, err := c.sc.QueryContext(r.run, query)
 	if err != nil {
 		r.err = wrapErr(ctx, err)
@@ -406,8 +404,7 @@ func wrapErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("%w: %v", ctx.Err(), err)
 	}
-	var me *mysql.MySQLError
-	if errors.As(err, &me) {
+	if me, ok := errors.AsType[*mysql.MySQLError](err); ok {
 		return &driver.Error{Code: strconv.Itoa(int(me.Number)), Message: me.Message}
 	}
 	return err

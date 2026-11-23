@@ -99,8 +99,7 @@ func Load(path string) (File, error) {
 	}
 	md, err := toml.Decode(string(data), &file)
 	if err != nil {
-		var pe toml.ParseError
-		if errors.As(err, &pe) {
+		if pe, ok := errors.AsType[toml.ParseError](err); ok {
 			return File{}, fmt.Errorf("line %d: %s", pe.Position.Line, pe.Message)
 		}
 		return File{}, err

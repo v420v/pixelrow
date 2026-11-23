@@ -92,4 +92,3 @@ func lower(c byte) byte {
 	}
 	return c
 }
-

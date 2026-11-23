@@ -248,10 +248,6 @@ func serialType(typ string) string {
 	return "serial"
 }
 
-func quoteString(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
 func (c *conn) names(ctx context.Context, sql string) ([]string, error) {
 	rows, err := c.read(ctx, sql)
 	if err != nil {
@@ -379,8 +375,7 @@ func wrapErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("%w: %v", ctx.Err(), err)
 	}
-	var pe *pgconn.PgError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return &driver.Error{
 			Code:     pe.Code,
 			Message:  pe.Message,

@@ -170,4 +170,3 @@ func yesNo(b bool) string {
 	}
 	return "No"
 }
-
