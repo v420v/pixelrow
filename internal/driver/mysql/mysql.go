@@ -208,7 +208,7 @@ func (c *conn) Describe(ctx context.Context, schema, table string) (*driver.Tabl
 			ddl.Close()
 			return nil, err
 		}
-		info.DDL = string(raw[1])
+		info.DDL = string(raw[1]) + ";"
 	}
 	if err := closeRows(ctx, ddl); err != nil {
 		return nil, err

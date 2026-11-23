@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -38,6 +39,11 @@ const template = `# Connections of the db client.
 # user = "postgres"
 # password = "postgres"
 # database = "postgres"
+
+# Where the dump programs are, when the app does not find them by itself.
+# [tools]
+# mysqldump = "/opt/homebrew/opt/mysql-client/bin/mysqldump"
+# pg_dump = "/opt/homebrew/opt/libpq/bin/pg_dump"
 `
 
 func Path() (string, error) {
@@ -68,31 +74,47 @@ func Create(path string) error {
 	return errors.Join(err, f.Close())
 }
 
-// Load returns the connections of the file at path, in the order it lists them.
-func Load(path string) ([]Connection, error) {
+type File struct {
+	// Connections are in the order the file lists them.
+	Connections []Connection
+	// Tools maps the name of a program the app runs, such as "pg_dump", to its path.
+	Tools map[string]string
+}
+
+// knownTools are the programs a [tools] table can place.
+var knownTools = []string{"mysqldump", "pg_dump"}
+
+// A missing file is an empty one.
+func Load(path string) (File, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return File{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return File{}, err
 	}
 	var file struct {
 		Connections map[string]Connection `toml:"connections"`
+		Tools       map[string]string     `toml:"tools"`
 	}
 	md, err := toml.Decode(string(data), &file)
 	if err != nil {
 		var pe toml.ParseError
 		if errors.As(err, &pe) {
-			return nil, fmt.Errorf("line %d: %s", pe.Position.Line, pe.Message)
+			return File{}, fmt.Errorf("line %d: %s", pe.Position.Line, pe.Message)
 		}
-		return nil, err
+		return File{}, err
 	}
 	if unknown := md.Undecoded(); len(unknown) > 0 {
-		return nil, fmt.Errorf("unknown key %q", unknown[0].String())
+		return File{}, fmt.Errorf("unknown key %q", unknown[0].String())
+	}
+	for name := range file.Tools {
+		if !slices.Contains(knownTools, name) {
+			return File{}, fmt.Errorf("unknown tool %q: [tools] takes %s", name, strings.Join(knownTools, " and "))
+		}
 	}
 
-	var conns []Connection
+	out := File{Tools: file.Tools}
 	for _, key := range md.Keys() {
 		if len(key) != 2 || key[0] != "connections" {
 			continue
@@ -103,12 +125,12 @@ func Load(path string) ([]Connection, error) {
 			conn.Kind = DefaultKind
 		}
 		if strings.TrimSpace(conn.Host) == "" {
-			return nil, fmt.Errorf("connection %q has no host", conn.Name)
+			return File{}, fmt.Errorf("connection %q has no host", conn.Name)
 		}
 		if conn.Port < 0 || conn.Port > 65535 {
-			return nil, fmt.Errorf("connection %q has an invalid port %d", conn.Name, conn.Port)
+			return File{}, fmt.Errorf("connection %q has an invalid port %d", conn.Name, conn.Port)
 		}
-		conns = append(conns, conn)
+		out.Connections = append(out.Connections, conn)
 	}
-	return conns, nil
+	return out, nil
 }

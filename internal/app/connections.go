@@ -22,10 +22,15 @@ type connections struct {
 	onTable  func(conn, schema, table string)
 	// onDisconnect is called after a connection is disconnected, or changed or removed in the config file.
 	onDisconnect func(conn string)
+	// onDump is called to dump table of schema, or the whole schema when table is "".
+	onDump func(conn, schema, table string)
+	footer func(c *ui.Context)
 
 	loaded  bool
 	nodes   []*connNode
 	loadErr error
+	// tools maps the programs the config file places to their paths.
+	tools map[string]string
 	// selected is the name of the connection new queries open on.
 	selected      string
 	selectedTable string
@@ -71,6 +76,7 @@ func (s *connections) view(c *ui.Context) {
 				}
 			})
 		})
+		s.footer(c)
 		if s.fileErr != nil {
 			ui.Divider(c)
 			ui.Text(c, "Could not open the config file: "+s.fileErr.Error()).TextColor(t.Danger).FontSize(11).Padding(t.Space(2))
@@ -92,9 +98,12 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 	chosen := s.selected == name && s.selectedTable == ""
 	item := ui.TreeItem(c, name, &n.open, func() {
 		if n.browser != nil {
-			n.browser.items(c, &s.selectedTable, name, func(schema, table string) {
-				s.selected = name
-				s.onTable(name, schema, table)
+			n.browser.items(c, &s.selectedTable, name, treeActions{
+				openTable: func(schema, table string) {
+					s.selected = name
+					s.onTable(name, schema, table)
+				},
+				dump: func(schema, table string) { s.onDump(name, schema, table) },
 			})
 		}
 	}).Selected(chosen).Tooltip(n.conf.Kind + " · " + address(n.conf))
@@ -167,12 +176,14 @@ func (s *connections) reload() {
 		s.loadErr = err
 		return
 	}
-	list, err := config.Load(s.path)
+	file, err := config.Load(s.path)
 	s.loadErr = err
+	list := file.Connections
 	if err != nil {
 		// The connections already open stay as they are until the file reads again.
 		return
 	}
+	s.tools = file.Tools
 
 	old := map[string]*connNode{}
 	for _, n := range s.nodes {

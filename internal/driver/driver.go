@@ -56,7 +56,7 @@ type TableInfo struct {
 	Columns     []ColumnInfo
 	Indexes     []Index
 	ForeignKeys []ForeignKey
-	// DDL is the statement that creates the table, or "" where the database has no statement that returns it.
+	// DDL holds the statements that create the table, each ending in a semicolon.
 	DDL string
 }
 
@@ -155,4 +155,3 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return e.Message }
-

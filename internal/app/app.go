@@ -16,6 +16,7 @@ type App struct {
 	update  func(fn func())
 
 	connections  *connections
+	dumper       *dumper
 	sidebarWidth float32
 
 	tabs   []*tab
@@ -39,17 +40,32 @@ type tab struct {
 	view int
 }
 
-func New(drivers map[string]driver.Driver, configPath string, update func(fn func()), openFile func(path string) error) *App {
-	a := &App{drivers: drivers, update: update, sidebarWidth: 260}
+// Options is what the app needs from the system around it.
+type Options struct {
+	// Drivers maps a connection's kind to its driver.
+	Drivers    map[string]driver.Driver
+	ConfigPath string
+	// Update runs a function on the UI thread and redraws, as Window.Update does.
+	Update   func(fn func())
+	OpenFile func(path string) error
+	// SaveFile asks where to save a file named name, and returns "" when the user cancels.
+	SaveFile func(name string) (string, error)
+}
+
+func New(o Options) *App {
+	a := &App{drivers: o.Drivers, update: o.Update, sidebarWidth: 260}
 	a.connections = &connections{
-		path:         configPath,
-		drivers:      drivers,
-		update:       update,
-		openFile:     openFile,
+		path:         o.ConfigPath,
+		drivers:      o.Drivers,
+		update:       o.Update,
+		openFile:     o.OpenFile,
 		onQuery:      a.newQuery,
 		onTable:      a.openTable,
 		onDisconnect: a.disconnected,
 	}
+	a.dumper = &dumper{connections: a.connections, update: o.Update, saveFile: o.SaveFile}
+	a.connections.onDump = a.dumper.ask
+	a.connections.footer = a.dumper.view
 	return a
 }
 
@@ -60,6 +76,7 @@ func (a *App) View(c *ui.Context) {
 		}
 	})
 	ui.Split(c, &a.sidebarWidth, func() { a.connections.view(c) }, func() { a.tabsView(c) }).Fill()
+	a.dumper.dialog(c)
 }
 
 func (a *App) tabsView(c *ui.Context) {

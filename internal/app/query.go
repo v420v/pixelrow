@@ -202,7 +202,6 @@ func (p *QueryPane) Run(sql string) {
 	}()
 }
 
-// busy reports whether a query is running or a page is being read.
 func (p *QueryPane) busy() bool {
 	return p.running || p.result != nil && p.result.loading
 }
@@ -227,7 +226,6 @@ func (p *QueryPane) settle(r *result) {
 	}
 }
 
-// loadMore reads the next page of the result shown.
 func (p *QueryPane) loadMore() {
 	r := p.result
 	if p.running || r == nil || r.stream == nil || r.loading {
@@ -270,7 +268,6 @@ func (p *QueryPane) detachStream() (driver.Results, context.CancelFunc) {
 	return res, cancel
 }
 
-// stopStream gives up the rows left unread of the result shown.
 func (p *QueryPane) stopStream() {
 	res, cancel := p.detachStream()
 	if res == nil {
@@ -399,7 +396,6 @@ func readPage(res driver.Results, rows *[][]driver.Value) (done bool) {
 	return false
 }
 
-// finish closes res after its last row.
 func finish(res driver.Results) (command string, err error) {
 	command = res.Command()
 	for res.NextResultSet() {

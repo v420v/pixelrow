@@ -27,6 +27,13 @@ type browser struct {
 	closed bool
 }
 
+// treeActions is what the items of one connection do.
+type treeActions struct {
+	openTable func(schema, table string)
+	// dump asks to dump table of schema, or the whole schema when table is "".
+	dump func(schema, table string)
+}
+
 type schemaNode struct {
 	name    string
 	open    bool
@@ -38,7 +45,7 @@ type schemaNode struct {
 
 // items builds the tree items of the schemas, inside the item of their connection.
 // selected is the key of the table chosen in the whole tree, and prefix what the keys of this connection start with.
-func (b *browser) items(c *ui.Context, selected *string, prefix string, onTable func(schema, table string)) {
+func (b *browser) items(c *ui.Context, selected *string, prefix string, actions treeActions) {
 	t := c.Theme()
 	switch {
 	case b.err != nil:
@@ -51,11 +58,11 @@ func (b *browser) items(c *ui.Context, selected *string, prefix string, onTable 
 		ui.TreeItem(c, "No schemas", nil, nil).Disabled(true)
 	}
 	for _, n := range b.schemas {
-		b.schemaItem(c, n, selected, prefix, onTable)
+		b.schemaItem(c, n, selected, prefix, actions)
 	}
 }
 
-func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, prefix string, onTable func(schema, table string)) {
+func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, prefix string, actions treeActions) {
 	t := c.Theme()
 	if n.open && !n.loaded && !n.loading && n.err == nil {
 		b.loadTables(n)
@@ -80,10 +87,24 @@ func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, pre
 			case driver.KindMaterializedView:
 				item.Tooltip("Materialized view")
 			}
-			if item.Clicked() {
+			open := item.Clicked()
+			item.ContextMenu(func(m *ui.Menu) {
+				if m.Item("Open").Chosen() {
+					open = true
+				}
+				if m.Item("Dump Table…").Chosen() {
+					actions.dump(n.name, table.Name)
+				}
+			})
+			if open {
 				*selected = key
-				onTable(n.name, table.Name)
+				actions.openTable(n.name, table.Name)
 			}
+		}
+	})
+	schema.ContextMenu(func(m *ui.Menu) {
+		if m.Item("Dump Schema…").Chosen() {
+			actions.dump(n.name, "")
 		}
 	})
 	// A click on the name opens the schema, not only its arrow.

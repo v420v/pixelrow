@@ -29,9 +29,17 @@ func main() {
 		}
 		drivers := map[string]driver.Driver{
 			"postgres": postgres.Driver{},
-			"mysql": mysql.Driver{},
+			"mysql":    mysql.Driver{},
 		}
-		a := app.New(drivers, path, update, mygo.Shell.OpenPath)
+		a := app.New(app.Options{
+			Drivers:    drivers,
+			ConfigPath: path,
+			Update:     update,
+			OpenFile:   mygo.Shell.OpenPath,
+			SaveFile: func(name string) (string, error) {
+				return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, DefaultPath: name})
+			},
+		})
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "db client",
 			Width:   1280,
