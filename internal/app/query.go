@@ -1,4 +1,3 @@
-// Package app holds the screens of the app.
 package app
 
 import (
@@ -134,14 +133,16 @@ func (p *QueryPane) statusView(c *ui.Context) {
 
 // run executes the selected text, or the whole buffer when nothing is selected.
 func (p *QueryPane) run() {
-	if p.running {
-		return
-	}
 	sql := p.editor.Buffer.String()
 	if sel := p.editor.Selection(); sel.Start() != sel.End() {
 		sql = p.editor.Buffer.Slice(sel.Start(), sel.End())
 	}
-	if strings.TrimSpace(sql) == "" {
+	p.Run(sql)
+}
+
+// Run executes sql and shows its result, leaving the editor's text as it is.
+func (p *QueryPane) Run(sql string) {
+	if p.running || strings.TrimSpace(sql) == "" {
 		return
 	}
 

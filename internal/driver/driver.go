@@ -16,6 +16,8 @@ type Config struct {
 type Driver interface {
 	// Open establishes a connection. Canceling ctx aborts the attempt.
 	Open(ctx context.Context, cfg Config) (Conn, error)
+	// QuoteIdent quotes name for use as an identifier in SQL.
+	QuoteIdent(name string) string
 }
 
 // Conn is a single database session.

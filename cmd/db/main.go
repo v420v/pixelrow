@@ -2,7 +2,6 @@ package main
 
 import (
 	"cmp"
-	"context"
 	"log"
 	"os"
 	"strconv"
@@ -29,19 +28,23 @@ func envConfig() driver.Config {
 func main() {
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window
-		cfg := envConfig()
-		pane := app.NewQueryPane(
-			func(ctx context.Context) (driver.Conn, error) { return postgres.Driver{}.Open(ctx, cfg) },
-			func(fn func()) { win.Update(fn) },
-		)
+		// Results arrive from other goroutines: RunOnMain reads win on the thread that sets it.
+		update := func(fn func()) {
+			mygo.RunOnMain(func() {
+				fn()
+				win.Invalidate()
+			})
+		}
+		a := app.New(postgres.Driver{}, envConfig(), update)
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "db client",
 			Width:   1280,
 			Height:  800,
-			Content: ui.View(pane.View),
+			Content: ui.View(a.View),
 		})
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
+

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -46,6 +47,10 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 		return nil, wrapErr(ctx, err)
 	}
 	return &conn{pg: c}, nil
+}
+
+func (Driver) QuoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 type conn struct {
