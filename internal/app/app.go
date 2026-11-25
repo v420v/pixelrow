@@ -23,6 +23,8 @@ type App struct {
 
 	tabs   []*tab
 	active int
+	// revealed is the id of the tab the bar last scrolled to.
+	revealed int
 	// ids counts the tabs opened, and queries those opened as blank queries, to tell them apart.
 	ids     int
 	queries int
@@ -108,27 +110,8 @@ func (a *App) tabsView(c *ui.Context) {
 
 	closing := -1
 	ui.Column(c).Fill().Children(func() {
-		tabs := ui.TabsBase(c, &a.active, len(a.tabs))
-		tabs.List.FillWidth().Gap(t.Space(1)).Padding(t.Space(1), t.Space(2)).Children(func() {
-			for i, tb := range a.tabs {
-				c.Key(tb.id)
-				item := tabs.Tab(i).Row().Gap(t.Space(1)).AlignItems(ui.Center).Padding(t.Space(1), t.Space(2)).Radius(6)
-				if i == a.active {
-					item.Background(t.Surface)
-				}
-				item.ContextMenu(func(m *ui.Menu) {
-					if m.Item("Close Tab").Chosen() {
-						closing = i
-					}
-				})
-				item.Children(func() {
-					ui.Text(c, tb.conn).Bold().SingleLine()
-					ui.Text(c, tb.title).SingleLine()
-					if iconButton(c, iconClose, "Close "+tb.conn+" "+tb.title).Size(18, 18).Clicked() {
-						closing = i
-					}
-				})
-			}
+		ui.ScrollHorizontal(c).FillWidth().Shrink(0).Children(func() {
+			a.tabBar(c, &closing)
 		})
 		ui.Divider(c)
 		// The key gives each tab its own editor and table state.
@@ -160,6 +143,39 @@ func (a *App) tabsView(c *ui.Context) {
 	if closing >= 0 {
 		a.closeTab(closing)
 	}
+}
+
+// tabBar builds the tabs, and sets closing to the index of one the user closes.
+func (a *App) tabBar(c *ui.Context, closing *int) {
+	t := c.Theme()
+	tabs := ui.TabsBase(c, &a.active, len(a.tabs))
+	tabs.List.Gap(t.Space(1)).Padding(t.Space(1), t.Space(2)).Children(func() {
+		for i, tb := range a.tabs {
+			c.Key(tb.id)
+			// The tabs keep their width and the bar scrolls, rather than squeeze them until none can be read.
+			item := tabs.Tab(i).Row().Shrink(0).Gap(t.Space(1)).AlignItems(ui.Center).Padding(t.Space(1), t.Space(2)).Radius(6)
+			if i == a.active {
+				item.Background(t.Surface)
+				// A tab opened or chosen from elsewhere, as from the tree, can be out of view.
+				if a.revealed != tb.id {
+					a.revealed = tb.id
+					item.ScrollIntoView()
+				}
+			}
+			item.ContextMenu(func(m *ui.Menu) {
+				if m.Item("Close Tab").Chosen() {
+					*closing = i
+				}
+			})
+			item.Children(func() {
+				ui.Text(c, tb.conn).Bold().SingleLine()
+				ui.Text(c, tb.title).SingleLine()
+				if iconButton(c, iconClose, "Close "+tb.conn+" "+tb.title).Size(18, 18).Clicked() {
+					*closing = i
+				}
+			})
+		}
+	})
 }
 
 func (a *App) newQuery(conn string) {
