@@ -102,7 +102,8 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 	}
 
 	chosen := s.selected == name && s.selectedTable == ""
-	item := ui.TreeItem(c, name, &n.open, func() {
+	// The row has no label of the tree's own: the logo goes before the name, where a label would come first.
+	item := ui.TreeItem(c, "", &n.open, func() {
 		if n.browser != nil {
 			n.browser.items(c, &s.selectedTable, name, treeActions{
 				openTable: func(schema, table string) {
@@ -113,7 +114,7 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 				runFile: s.runFileIn(n),
 			})
 		}
-	}).Tooltip(n.conf.Kind + " · " + address(n.conf) + readOnlyNote(n.conf))
+	}).Label(name).Tooltip(n.conf.Kind + " · " + address(n.conf) + readOnlyNote(n.conf))
 	chosenLook(c, item, chosen)
 	t := c.Theme()
 	dot, state := t.Border, "Not connected"
@@ -126,6 +127,9 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 		dot, state = t.Warning, "Connecting"
 	}
 	item.Children(func() {
+		logo(c, n.conf.Kind)
+		ui.Column(c).Width(t.Space(1))
+		ui.Text(c, name).SingleLine()
 		if n.conf.Color != "" {
 			ui.Column(c).Width(t.Space(1))
 			colorDot(c, ui.Hex(n.conf.Color))
