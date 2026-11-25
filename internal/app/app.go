@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
@@ -110,11 +111,16 @@ func (a *App) tabsView(c *ui.Context) {
 	}
 	a.active = min(a.active, len(a.tabs)-1)
 
-	closing := -1
+	act := tabAction{close: -1, from: -1}
 	ui.Column(c).Fill().Children(func() {
-		ui.ScrollHorizontal(c).FillWidth().Shrink(0).Background(t.Surface).Children(func() {
-			a.tabBar(c, &closing)
+		bar := ui.ScrollHorizontal(c).FillWidth().Shrink(0).Background(t.Surface)
+		bar.Children(func() {
+			a.tabBar(c, &act)
 		})
+		// Let go past the last tab, a dragged tab goes to the end.
+		if id, ok := ui.Drop[draggedTab](bar); ok {
+			act.from, act.to = a.tabIndex(int(id)), len(a.tabs)-1
+		}
 		hairline(c)
 		// The key gives each tab its own editor and table state.
 		tb := a.tabs[a.active]
@@ -131,13 +137,26 @@ func (a *App) tabsView(c *ui.Context) {
 			}
 		})
 	})
-	if closing >= 0 {
-		a.closeTab(closing)
+	switch {
+	case act.close >= 0:
+		a.closeTab(act.close)
+	case act.from >= 0 && act.from != act.to:
+		a.moveTab(act.from, act.to)
 	}
 }
 
-// tabBar builds the tabs, and sets closing to the index of one the user closes.
-func (a *App) tabBar(c *ui.Context, closing *int) {
+// tabAction is what the user did to the tabs while they were built, to apply once the loop over them is done.
+type tabAction struct {
+	// close is the index of the tab to close, or -1.
+	close int
+	// from and to are where a dragged tab was and where it goes, and from is -1 when none was dropped.
+	from, to int
+}
+
+// draggedTab is the id of the tab a drag carries.
+type draggedTab int
+
+func (a *App) tabBar(c *ui.Context, act *tabAction) {
 	t := c.Theme()
 	tabs := ui.TabsBase(c, &a.active, len(a.tabs))
 	tabs.List.Children(func() {
@@ -164,9 +183,24 @@ func (a *App) tabBar(c *ui.Context, closing *int) {
 			}
 			item.ContextMenu(func(m *ui.Menu) {
 				if m.Item("Close Tab").Chosen() {
-					*closing = i
+					act.close = i
 				}
 			})
+			item.Drag(draggedTab(tb.id))
+			if item.Dragging() {
+				item.Opacity(0.4)
+			}
+			// A line on the edge the dragged tab would land beside: it takes this tab's place, pushing it the other way.
+			if id, over := ui.DragOver[draggedTab](item); over && int(id) != tb.id {
+				edge := float32(2)
+				if a.tabIndex(int(id)) < i {
+					edge = -2
+				}
+				item.InsetShadow(edge, 0, 0, 0, t.Accent)
+			}
+			if id, ok := ui.Drop[draggedTab](item); ok {
+				act.from, act.to = a.tabIndex(int(id)), i
+			}
 			// The connection's color lines the top edge of its tabs, in full on the one shown.
 			if conf, _ := a.connections.conf(tb.conn); conf.Color != "" {
 				line := ui.Hex(conf.Color)
@@ -179,7 +213,7 @@ func (a *App) tabBar(c *ui.Context, closing *int) {
 				ui.Text(c, tb.conn).FontSize(smallText).FontWeight(600).TextColor(name).SingleLine()
 				ui.Text(c, tb.title).FontSize(smallText).TextColor(title).SingleLine()
 				if iconButton(c, iconClose, "Close "+tb.conn+" "+tb.title).Size(18, 18).Clicked() {
-					*closing = i
+					act.close = i
 				}
 			})
 		}
@@ -249,6 +283,22 @@ func (a *App) mark(pane *QueryPane, conf config.Connection) {
 	if conf.Color != "" {
 		pane.Color = ui.Hex(conf.Color)
 	}
+}
+
+func (a *App) tabIndex(id int) int {
+	return slices.IndexFunc(a.tabs, func(tb *tab) bool { return tb.id == id })
+}
+
+// The tab shown stays shown.
+func (a *App) moveTab(from, to int) {
+	if from < 0 || to < 0 || from >= len(a.tabs) || to >= len(a.tabs) {
+		return
+	}
+	shown := a.tabs[a.active]
+	moved := a.tabs[from]
+	a.tabs = slices.Delete(a.tabs, from, from+1)
+	a.tabs = slices.Insert(a.tabs, to, moved)
+	a.active = slices.Index(a.tabs, shown)
 }
 
 func (a *App) closeTab(i int) {
