@@ -255,6 +255,30 @@ func serialType(typ string) string {
 	return "serial"
 }
 
+func (c *conn) References(ctx context.Context, schema, table string) ([]driver.Reference, error) {
+	rows, err := c.read(ctx, `
+		SELECT n.nspname, c.relname, con.conname,
+			(SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+			(SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+		FROM pg_constraint con
+		JOIN pg_class c ON c.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_class fc ON fc.oid = con.confrelid
+		JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+		WHERE con.contype = 'f' AND fn.nspname = $1 AND fc.relname = $2
+		ORDER BY n.nspname, c.relname, con.conname`, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]driver.Reference, len(rows))
+	for i, r := range rows {
+		refs[i] = driver.Reference{Schema: string(r[0]), Table: string(r[1]), Name: string(r[2]), Columns: string(r[3]), RefColumns: string(r[4])}
+	}
+	return refs, nil
+}
+
 func (c *conn) names(ctx context.Context, sql string) ([]string, error) {
 	rows, err := c.read(ctx, sql)
 	if err != nil {

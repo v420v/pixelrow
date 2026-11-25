@@ -34,6 +34,8 @@ type Conn interface {
 	// Tables returns the tables and views in schema, sorted by name.
 	Tables(ctx context.Context, schema string) ([]Table, error)
 	Describe(ctx context.Context, schema, table string) (*TableInfo, error)
+	// References returns the foreign keys of other tables, and of the table itself, that point at table.
+	References(ctx context.Context, schema, table string) ([]Reference, error)
 
 	// Query runs sql, which may contain multiple statements.
 	// Canceling ctx stops the running query on the server.
@@ -93,6 +95,17 @@ type ForeignKey struct {
 	Columns    string
 	RefSchema  string
 	RefTable   string
+	RefColumns string
+}
+
+// Reference is a foreign key seen from the table it points at.
+type Reference struct {
+	// Schema and Table name the table that has the foreign key.
+	Schema string
+	Table  string
+	Name   string
+	// Columns are those of Table, and RefColumns those they point at, in matching order, separated by ", ".
+	Columns    string
 	RefColumns string
 }
 

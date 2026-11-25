@@ -40,9 +40,10 @@ type tab struct {
 	table string
 	title string
 	pane  *QueryPane
-	// structure is nil for a blank query.
+	// structure and relations are nil for a blank query.
 	structure *structure
-	// view is 0 for the rows and 1 for the structure.
+	relations *relations
+	// view is 0 for the rows, 1 for the structure and 2 for the relations.
 	view int
 }
 
@@ -130,9 +131,12 @@ func (a *App) tabsView(c *ui.Context) {
 		}
 		c.Key([2]int{tb.id, tb.view})
 		ui.Column(c).Grow(1).FillWidth().Children(func() {
-			if tb.structure != nil && tb.view == 1 {
+			switch {
+			case tb.structure != nil && tb.view == 1:
 				tb.structure.view(c)
-			} else {
+			case tb.relations != nil && tb.view == 2:
+				tb.relations.view(c)
+			default:
 				tb.pane.View(c)
 			}
 		})
@@ -250,16 +254,27 @@ func (a *App) openTable(conn, schema, table string) {
 		schema: schema,
 		table:  table,
 	}
-	// Both views of the table end their bar with the switch to the other.
+	tb.relations = &relations{
+		dial:   tb.structure.dial,
+		update: a.update,
+		schema: schema,
+		table:  table,
+		// A table of the diagram opens on its own relations, so that the user can walk from table to table.
+		open: func(schema, table string) {
+			a.openTable(conn, schema, table)
+			a.tabs[a.active].view = 2
+		},
+	}
+	// Each view of the table ends its bar with the switch to the others.
 	views := func(c *ui.Context) {
 		for view, button := range []struct {
 			icon  *ui.SVG
 			label string
-		}{{iconRows, "Data"}, {iconFields, "Structure"}} {
+		}{{iconRows, "Data"}, {iconFields, "Structure"}, {iconLinks, "Relations"}} {
 			toggleButton(c, button.icon, button.label, tb.view == view).OnClick(func() { tb.view = view })
 		}
 	}
-	tb.pane.Trailing, tb.structure.trailing = views, views
+	tb.pane.Trailing, tb.structure.trailing, tb.relations.trailing = views, views, views
 	tb.pane.table = &tableRef{schema: schema, table: table, sql: sql, drv: drv}
 	tb.pane.SetText(sql)
 	tb.pane.Run(sql)

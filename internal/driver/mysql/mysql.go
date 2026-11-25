@@ -226,6 +226,29 @@ func (c *conn) Describe(ctx context.Context, schema, table string) (*driver.Tabl
 	return info, nil
 }
 
+func (c *conn) References(ctx context.Context, schema, table string) ([]driver.Reference, error) {
+	rows, err := c.sc.QueryContext(ctx, `
+		SELECT table_schema, table_name, constraint_name,
+			GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ', '),
+			GROUP_CONCAT(referenced_column_name ORDER BY ordinal_position SEPARATOR ', ')
+		FROM information_schema.key_column_usage
+		WHERE referenced_table_schema = ? AND referenced_table_name = ?
+		GROUP BY table_schema, table_name, constraint_name ORDER BY table_schema, table_name, constraint_name`, schema, table)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	var refs []driver.Reference
+	for rows.Next() {
+		var ref driver.Reference
+		if err := rows.Scan(&ref.Schema, &ref.Table, &ref.Name, &ref.Columns, &ref.RefColumns); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, closeRows(ctx, rows)
+}
+
 func closeRows(ctx context.Context, rows *sql.Rows) error {
 	err := rows.Err()
 	rows.Close()
