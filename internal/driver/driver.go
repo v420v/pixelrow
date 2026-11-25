@@ -15,6 +15,8 @@ type Driver interface {
 	// Open establishes a connection. Canceling ctx aborts the attempt.
 	Open(ctx context.Context, cfg Config) (Conn, error)
 	QuoteIdent(name string) string
+	// Placeholder is how the sql of Conn.Exec writes its nth parameter, counted from 1.
+	Placeholder(n int) string
 	// DefaultPort is the port Open connects to when Config names none.
 	DefaultPort() int
 }
@@ -36,6 +38,9 @@ type Conn interface {
 	// The resulting error matches errors.Is(err, context.Canceled).
 	// The Conn stays usable after a cancel.
 	Query(ctx context.Context, sql string) (Results, error)
+
+	// Exec runs a single statement with args as its parameters, and returns how many rows it affected.
+	Exec(ctx context.Context, sql string, args ...Value) (int64, error)
 
 	Close() error
 }

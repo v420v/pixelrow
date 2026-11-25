@@ -192,6 +192,7 @@ func (a *App) openTable(conn, schema, table string) {
 		schema: schema,
 		table:  table,
 	}
+	tb.pane.table = &tableRef{schema: schema, table: table, sql: sql, drv: drv}
 	tb.pane.SetText(sql)
 	tb.pane.Run(sql)
 }

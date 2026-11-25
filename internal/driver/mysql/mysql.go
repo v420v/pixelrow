@@ -66,6 +66,8 @@ func (Driver) QuoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
+func (Driver) Placeholder(int) string { return "?" }
+
 type conn struct {
 	db *sql.DB
 	sc *sql.Conn
@@ -222,6 +224,21 @@ func closeRows(ctx context.Context, rows *sql.Rows) error {
 	err := rows.Err()
 	rows.Close()
 	return wrapErr(ctx, err)
+}
+
+// ponytail: a cancel drops the connection rather than KILL the statement as Query does; the server then rolls back.
+func (c *conn) Exec(ctx context.Context, query string, args ...driver.Value) (int64, error) {
+	params := make([]any, len(args))
+	for i, a := range args {
+		if !a.Null {
+			params[i] = a.Text
+		}
+	}
+	res, err := c.sc.ExecContext(ctx, query, params...)
+	if err != nil {
+		return 0, wrapErr(ctx, err)
+	}
+	return res.RowsAffected()
 }
 
 func (c *conn) Query(ctx context.Context, query string) (driver.Results, error) {

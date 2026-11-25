@@ -55,6 +55,8 @@ func (Driver) QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
+func (Driver) Placeholder(n int) string { return "$" + strconv.Itoa(n) }
+
 type conn struct {
 	pg *pgconn.PgConn
 }
@@ -272,6 +274,18 @@ func (c *conn) read(ctx context.Context, sql string, args ...string) ([][][]byte
 		return nil, wrapErr(ctx, res.Err)
 	}
 	return res.Rows, nil
+}
+
+// The parameters go as text of no declared type, so the server reads each as the type of the column it meets.
+func (c *conn) Exec(ctx context.Context, sql string, args ...driver.Value) (int64, error) {
+	params := make([][]byte, len(args))
+	for i, a := range args {
+		if !a.Null {
+			params[i] = append([]byte{}, a.Text...)
+		}
+	}
+	res := c.pg.ExecParams(ctx, sql, params, nil, nil, nil).Read()
+	return res.CommandTag.RowsAffected(), wrapErr(ctx, res.Err)
 }
 
 func (c *conn) Query(ctx context.Context, sql string) (driver.Results, error) {

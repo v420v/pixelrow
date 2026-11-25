@@ -38,6 +38,9 @@ type QueryPane struct {
 	// update runs fn on the UI thread and redraws, as Window.Update does.
 	update func(fn func())
 
+	// table is the table the pane was opened for, whose rows can be edited, or nil for a blank query.
+	table *tableRef
+
 	editor *editor.State
 	split  float32
 
@@ -55,6 +58,9 @@ type QueryPane struct {
 
 // result represents the last result set produced by a single execution, or an error.
 type result struct {
+	// sql is the query that produced the result.
+	sql     string
+	cols    []driver.Column
 	columns []ui.TableColumn
 	rows    [][]driver.Value
 	// total counts the rows of a result read to its end, including those past maxRows that were not kept.
@@ -72,6 +78,11 @@ type result struct {
 	idle    *time.Timer
 
 	table ui.ListState
+	// chosen holds the rows chosen by their place among those shown, and row is the one the keys move from.
+	chosen ui.Selection[int]
+	row    int
+	// edits is nil for a result that cannot be edited.
+	edits *edits
 	// id keys the table so that each result starts with fresh scroll and column state.
 	id int
 }
@@ -96,10 +107,11 @@ func NewQueryPane(open func(ctx context.Context) (driver.Conn, error), update fu
 func (p *QueryPane) View(c *ui.Context) {
 	t := c.Theme()
 	c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, p.run)
+	c.OnWindowShortcut(ui.Cmd, ui.KeyS, p.commit)
 
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			primaryIconButton(c, iconRun, "Run").Disabled(p.busy()).OnClick(p.run)
+			primaryIconButton(c, iconRun, "Run").Disabled(p.busy() || p.unsaved()).OnClick(p.run)
 			if p.busy() {
 				iconButton(c, iconStop, "Cancel").OnClick(p.cancelRun)
 			}
@@ -120,29 +132,44 @@ func (p *QueryPane) View(c *ui.Context) {
 }
 
 func (p *QueryPane) resultView(c *ui.Context) {
-	t := c.Theme()
 	r := p.result
 	switch {
 	case r == nil || len(r.columns) == 0:
 		ui.Column(c).Fill()
 	default:
 		c.Key(r.id)
-		ui.Table(c, &r.table, r.columns, len(r.rows), func(row, col int) {
+		r.table.Selection, r.table.Selected, r.table.CellSelect = &r.chosen, &r.row, true
+		// A wash of the accent rather than a solid block: the cells keep their own text colors,
+		// which also tell NULLs and pending edits apart, and the cursor's border stays visible on it.
+		t := c.Theme()
+		r.table.CellsStyle = ui.CellsStyle{
+			Cell:     t.Accent.Alpha(0.16),
+			CellText: t.Accent,
+			Row:      t.Accent.Alpha(0.05),
+		}
+		r.table.CellMenu = nil
+		// The rows stay as they are while a commit runs, which ends by reading them again.
+		editing := r.edits != nil && !p.running
+		if editing {
+			r.table.CellMenu = p.cellMenu(r)
+		}
+		table := ui.Table(c, &r.table, r.columns, r.shown(), func(row, col int) {
 			// The table builds only the rows in view, so building one near the end means the user scrolled there.
-			if col == 0 && row >= len(r.rows)-loadAhead {
+			if col == 0 && row >= r.shown()-loadAhead {
 				p.loadMore()
 			}
-			v := r.rows[row][col]
-			text := ui.Text(c, v.Text)
-			if v.Null {
-				text = ui.Text(c, "NULL").Italic().TextColor(t.TextMuted)
-			}
-			if r.table.CellSelected(row, col) {
-				text.TextColor(t.AccentText)
-			}
-			text.SingleLine()
+			p.cellView(c, r, cell{row, col})
 		}).Fill()
+		// A double click or Enter edits the cell the keys are on.
+		if col, err := strconv.Atoi(r.table.Cells.Cursor); editing && err == nil && table.Submitted() {
+			r.beginEdit(cell{r.row, col})
+		}
 	}
+}
+
+// unsaved reports whether the result shown has edits, which another run would lose.
+func (p *QueryPane) unsaved() bool {
+	return p.result != nil && p.result.edits.count() > 0
 }
 
 func (p *QueryPane) statusView(c *ui.Context) {
@@ -160,7 +187,17 @@ func (p *QueryPane) statusView(c *ui.Context) {
 			if r.loading {
 				ui.Spinner(c)
 			}
-			ui.Text(c, r.summary()).TextColor(t.TextMuted)
+			switch {
+			case r.edits != nil && r.edits.err != nil:
+				ui.Text(c, errorText(r.edits.err)).TextColor(t.Danger).Selectable().Grow(1).MinWidth(0)
+			case p.table != nil && r.edits == nil && len(r.columns) > 0:
+				ui.Text(c, r.summary()+" · Read-only").TextColor(t.TextMuted).Grow(1)
+			default:
+				ui.Text(c, r.summary()).TextColor(t.TextMuted).Grow(1)
+			}
+			if r.edits != nil {
+				p.editBar(c, r)
+			}
 		}
 	})
 }
@@ -176,7 +213,7 @@ func (p *QueryPane) run() {
 
 // Run executes sql and shows its result, leaving the editor's text as it is.
 func (p *QueryPane) Run(sql string) {
-	if p.busy() || strings.TrimSpace(sql) == "" {
+	if p.busy() || p.unsaved() || strings.TrimSpace(sql) == "" {
 		return
 	}
 
@@ -324,7 +361,7 @@ func (p *QueryPane) cancelRun() {
 
 func (p *QueryPane) execute(ctx context.Context, sql string) *result {
 	start := time.Now()
-	r := &result{}
+	r := &result{sql: sql, row: -1}
 	r.err = p.read(ctx, sql, r)
 	r.elapsed = time.Since(start)
 	if r.stream == nil {
@@ -349,12 +386,22 @@ func (p *QueryPane) read(ctx context.Context, sql string, r *result) error {
 		}
 		p.conn = conn
 	}
+	// The table's key is read before the query, whose open result keeps the session busy.
+	// Without it the result still shows, read-only.
+	var info *driver.TableInfo
+	if p.table != nil && p.table.selects(sql) {
+		info, _ = p.conn.Describe(ctx, p.table.schema, p.table.table)
+	}
 	res, err := p.conn.Query(ctx, sql)
 	if err != nil {
 		return err
 	}
 	if streamable(sql) {
-		return readFirst(res, r)
+		err := readFirst(res, r)
+		if err == nil && info != nil {
+			r.edits = newEdits(p.table, info, r.cols)
+		}
+		return err
 	}
 	for res.NextResultSet() {
 		r.setColumns(res.Columns())
@@ -404,6 +451,7 @@ func finish(res driver.Results) (command string, err error) {
 }
 
 func (r *result) setColumns(cols []driver.Column) {
+	r.cols = cols
 	r.columns = make([]ui.TableColumn, len(cols))
 	for i, col := range cols {
 		r.columns[i] = ui.TableColumn{Title: col.Name, ID: strconv.Itoa(i), Width: 160, MinWidth: 40}
