@@ -84,8 +84,8 @@ func (j *jobs) view(c *ui.Context) {
 		return
 	}
 	t := c.Theme()
-	ui.Divider(c)
-	ui.Column(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(1)).Children(func() {
+	hairline(c)
+	ui.Column(c).FillWidth().Padding(t.Space(2), t.Space(2), t.Space(2), t.Space(3)).Gap(t.Space(1)).Children(func() {
 		if run := j.running; run != nil {
 			text, fraction := run.progress()
 			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {

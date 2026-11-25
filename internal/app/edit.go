@@ -305,7 +305,7 @@ func (p *QueryPane) cellView(c *ui.Context, r *result, at cell) {
 	if at.row < created {
 		set := e.inserted[at.row][at.col]
 		if set == nil {
-			ui.Text(c, "DEFAULT").Italic().TextColor(t.Success).SingleLine()
+			ui.Text(c, "DEFAULT").Italic().TextColor(t.Success).Font(monospace).FontSize(smallText).SingleLine()
 			return
 		}
 		v, color = *set, t.Success
@@ -332,7 +332,7 @@ func (p *QueryPane) cellView(c *ui.Context, r *result, at cell) {
 	if deleted {
 		text.Strikethrough()
 	}
-	text.TextColor(color).SingleLine()
+	text.TextColor(color).Font(monospace).FontSize(smallText).SingleLine()
 }
 
 // cellMenu is the context menu of the cells of a result that can be edited.

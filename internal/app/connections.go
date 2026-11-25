@@ -61,15 +61,15 @@ func (s *connections) view(c *ui.Context) {
 		s.reload()
 	}
 
-	ui.Column(c).Fill().Children(func() {
-		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Connections").Bold().SingleLine()
+	ui.Column(c).Fill().Background(t.Surface).Children(func() {
+		ui.Row(c).FillWidth().Height(barHeight).Shrink(0).Padding(0, t.Space(2), 0, t.Space(3)).Gap(t.Space(0.5)).AlignItems(ui.Center).Children(func() {
+			heading(c, "CONNECTIONS")
 			ui.Spacer(c)
 			iconButton(c, iconFile, "Open Config File").Tooltip("Open " + s.path).OnClick(s.openConfig)
 			iconButton(c, iconReload, "Reload").Tooltip("Read the config file again").OnClick(s.reload)
 		})
-		ui.Divider(c)
-		ui.Scroll(c).Grow(1).FillWidth().Children(func() {
+		hairline(c)
+		ui.Scroll(c).Grow(1).FillWidth().Padding(t.Space(1), 0).Children(func() {
 			switch {
 			case s.loadErr != nil:
 				ui.Text(c, "The config file could not be read: "+s.loadErr.Error()).TextColor(t.Danger).Padding(t.Space(2)).Selectable()
@@ -113,7 +113,8 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 				runFile: s.runFileIn(n),
 			})
 		}
-	}).Selected(chosen).Tooltip(n.conf.Kind + " · " + address(n.conf) + readOnlyNote(n.conf))
+	}).Tooltip(n.conf.Kind + " · " + address(n.conf) + readOnlyNote(n.conf))
+	chosenLook(c, item, chosen)
 	t := c.Theme()
 	dot, state := t.Border, "Not connected"
 	switch {
@@ -125,7 +126,10 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 		dot, state = t.Warning, "Connecting"
 	}
 	item.Children(func() {
-		colorChip(c, n.conf)
+		if n.conf.Color != "" {
+			ui.Column(c).Width(t.Space(1))
+			colorDot(c, ui.Hex(n.conf.Color))
+		}
 		ui.Spacer(c)
 		ui.Column(c).Width(8).Height(8).Radius(4).Shrink(0).Background(dot).Label(name + ": " + state)
 	})
@@ -394,10 +398,8 @@ func address(conn config.Connection) string {
 	return s
 }
 
-func colorChip(c *ui.Context, conn config.Connection) {
-	if conn.Color != "" {
-		ui.Column(c).Width(4).Height(14).Radius(2).Shrink(0).Background(ui.Hex(conn.Color)).Label("Color of " + conn.Name)
-	}
+func colorDot(c *ui.Context, color ui.Color) {
+	ui.Column(c).Width(7).Height(7).Radius(4).Shrink(0).Background(color)
 }
 
 func readOnlyNote(conn config.Connection) string {
@@ -405,4 +407,11 @@ func readOnlyNote(conn config.Connection) string {
 		return " · read-only"
 	}
 	return ""
+}
+
+// chosenLook marks the item of the tree that is chosen with a quiet fill, where the theme's own would fill it with the accent.
+func chosenLook(c *ui.Context, item ui.Element, chosen bool) {
+	if chosen {
+		item.Background(c.Theme().SurfacePressed)
+	}
 }

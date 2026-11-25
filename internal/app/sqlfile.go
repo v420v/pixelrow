@@ -86,7 +86,9 @@ func (r *fileRunner) dialog(c *ui.Context) {
 				})
 				ui.Row(c).Gap(t.Space(3)).Children(func() {
 					ui.Text(c, "Runs on").TextColor(t.TextMuted).Width(70)
-					colorChip(c, f.conf)
+					if f.conf.Color != "" {
+						colorDot(c, ui.Hex(f.conf.Color))
+					}
 					ui.Text(c, f.target()).Bold().Selectable()
 				})
 			})

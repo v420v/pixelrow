@@ -88,6 +88,7 @@ func (a *App) Close() {
 }
 
 func (a *App) View(c *ui.Context) {
+	useTheme(c)
 	c.OnWindowShortcut(ui.Cmd, ui.KeyT, func() {
 		if a.connections.selected != "" {
 			a.newQuery(a.connections.selected)
@@ -101,9 +102,9 @@ func (a *App) View(c *ui.Context) {
 func (a *App) tabsView(c *ui.Context) {
 	t := c.Theme()
 	if len(a.tabs) == 0 {
-		ui.Column(c).Fill().Center().Gap(t.Space(2)).Children(func() {
-			ui.Text(c, "No query open").FontSize(18).Bold()
-			ui.Text(c, "Choose a table on the left, or right-click a connection and choose New Query.").TextColor(t.TextMuted)
+		ui.Column(c).Fill().Center().Gap(t.Space(1.5)).Children(func() {
+			ui.Text(c, "No query open").FontSize(15).FontWeight(600)
+			ui.Text(c, "Choose a table on the left, or right-click a connection and choose New Query.").FontSize(smallText).TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -111,32 +112,12 @@ func (a *App) tabsView(c *ui.Context) {
 
 	closing := -1
 	ui.Column(c).Fill().Children(func() {
-		ui.ScrollHorizontal(c).FillWidth().Shrink(0).Children(func() {
+		ui.ScrollHorizontal(c).FillWidth().Shrink(0).Background(t.Surface).Children(func() {
 			a.tabBar(c, &closing)
 		})
-		// A band across the whole tab, so its connection is told at a glance and not only by reading the name.
-		if conf, _ := a.connections.conf(a.tabs[a.active].conn); conf.Color != "" {
-			ui.Column(c).FillWidth().Height(3).Shrink(0).Background(ui.Hex(conf.Color))
-		} else {
-			ui.Divider(c)
-		}
+		hairline(c)
 		// The key gives each tab its own editor and table state.
 		tb := a.tabs[a.active]
-		if tb.structure != nil {
-			ui.Row(c).FillWidth().Padding(t.Space(1), t.Space(2)).Gap(t.Space(1)).Children(func() {
-				for view, button := range []struct {
-					icon  *ui.SVG
-					label string
-				}{{iconRows, "Data"}, {iconFields, "Structure"}} {
-					build := iconButton
-					if tb.view == view {
-						build = primaryIconButton
-					}
-					build(c, button.icon, button.label).OnClick(func() { tb.view = view })
-				}
-			})
-			ui.Divider(c)
-		}
 		// Read each time, so a color or readonly changed in the config file shows after a reload.
 		if conf, ok := a.connections.conf(tb.conn); ok {
 			a.mark(tb.pane, conf)
@@ -159,13 +140,22 @@ func (a *App) tabsView(c *ui.Context) {
 func (a *App) tabBar(c *ui.Context, closing *int) {
 	t := c.Theme()
 	tabs := ui.TabsBase(c, &a.active, len(a.tabs))
-	tabs.List.Gap(t.Space(1)).Padding(t.Space(1), t.Space(2)).Children(func() {
+	tabs.List.Children(func() {
 		for i, tb := range a.tabs {
 			c.Key(tb.id)
 			// The tabs keep their width and the bar scrolls, rather than squeeze them until none can be read.
-			item := tabs.Tab(i).Row().Shrink(0).Gap(t.Space(1)).AlignItems(ui.Center).Padding(t.Space(1), t.Space(2)).Radius(6)
+			item := tabs.Tab(i).Row().Shrink(0).Height(barHeight).Gap(t.Space(1.5)).AlignItems(ui.Center).Padding(0, t.Space(2), 0, t.Space(3)).
+				BorderWidth(0, 1, 0, 0).BorderColor(t.Border)
+			// The tab shown is cut out of the bar, on the background of what it shows, and the others stay back.
+			name, title := t.TextMuted, t.TextMuted
+			switch {
+			case i == a.active:
+				name, title = t.Text, t.Text
+				item.Background(t.Background)
+			case item.Hovered():
+				item.Background(t.SurfaceHover)
+			}
 			if i == a.active {
-				item.Background(t.Surface)
 				// A tab opened or chosen from elsewhere, as from the tree, can be out of view.
 				if a.revealed != tb.id {
 					a.revealed = tb.id
@@ -177,11 +167,17 @@ func (a *App) tabBar(c *ui.Context, closing *int) {
 					*closing = i
 				}
 			})
-			conf, _ := a.connections.conf(tb.conn)
+			// The connection's color lines the top edge of its tabs, in full on the one shown.
+			if conf, _ := a.connections.conf(tb.conn); conf.Color != "" {
+				line := ui.Hex(conf.Color)
+				if i != a.active {
+					line = line.Alpha(0.45)
+				}
+				item.InsetShadow(0, 2, 0, 0, line)
+			}
 			item.Children(func() {
-				colorChip(c, conf)
-				ui.Text(c, tb.conn).Bold().SingleLine()
-				ui.Text(c, tb.title).SingleLine()
+				ui.Text(c, tb.conn).FontSize(smallText).FontWeight(600).TextColor(name).SingleLine()
+				ui.Text(c, tb.title).FontSize(smallText).TextColor(title).SingleLine()
 				if iconButton(c, iconClose, "Close "+tb.conn+" "+tb.title).Size(18, 18).Clicked() {
 					*closing = i
 				}
@@ -220,6 +216,16 @@ func (a *App) openTable(conn, schema, table string) {
 		schema: schema,
 		table:  table,
 	}
+	// Both views of the table end their bar with the switch to the other.
+	views := func(c *ui.Context) {
+		for view, button := range []struct {
+			icon  *ui.SVG
+			label string
+		}{{iconRows, "Data"}, {iconFields, "Structure"}} {
+			toggleButton(c, button.icon, button.label, tb.view == view).OnClick(func() { tb.view = view })
+		}
+	}
+	tb.pane.Trailing, tb.structure.trailing = views, views
 	tb.pane.table = &tableRef{schema: schema, table: table, sql: sql, drv: drv}
 	tb.pane.SetText(sql)
 	tb.pane.Run(sql)

@@ -17,6 +17,8 @@ type structure struct {
 	update func(fn func())
 	schema string
 	table  string
+	// trailing builds what goes at the end of the bar, as the switch between the views of a table.
+	trailing func(c *ui.Context)
 
 	started bool
 	loading bool
@@ -36,21 +38,28 @@ func (s *structure) view(c *ui.Context) {
 		s.load()
 	}
 
-	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).FillWidth().Padding(t.Space(3)).Gap(t.Space(3)).Children(func() {
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, s.schema+"."+s.table).Bold().SingleLine()
-				iconButton(c, iconReload, "Reload Structure").Disabled(s.loading).OnClick(s.load)
-				if s.loading {
-					ui.Spinner(c)
+	ui.Column(c).Fill().Children(func() {
+		ui.Row(c).FillWidth().Height(barHeight).Shrink(0).Padding(0, t.Space(2), 0, t.Space(3)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, s.schema+"."+s.table).FontSize(smallText).FontWeight(600).Font(monospace).SingleLine()
+			iconButton(c, iconReload, "Reload Structure").Disabled(s.loading).OnClick(s.load)
+			if s.loading {
+				ui.Spinner(c)
+			}
+			ui.Spacer(c)
+			if s.trailing != nil {
+				s.trailing(c)
+			}
+		})
+		hairline(c)
+		ui.Scroll(c).Grow(1).FillWidth().Children(func() {
+			ui.Column(c).FillWidth().Padding(t.Space(4), t.Space(3)).Gap(t.Space(2)).Children(func() {
+				switch {
+				case s.err != nil:
+					ui.Text(c, errorText(s.err)).TextColor(t.Danger).Selectable()
+				case s.info != nil:
+					s.infoView(c)
 				}
 			})
-			switch {
-			case s.err != nil:
-				ui.Text(c, errorText(s.err)).TextColor(t.Danger).Selectable()
-			case s.info != nil:
-				s.infoView(c)
-			}
 		})
 	})
 }
@@ -58,16 +67,25 @@ func (s *structure) view(c *ui.Context) {
 func (s *structure) infoView(c *ui.Context) {
 	t := c.Theme()
 	info := s.info
-	text := func(v string) { ui.Text(c, v).SingleLine().Selectable() }
+	text := func(v string) { ui.Text(c, v).Font(monospace).FontSize(smallText).SingleLine().Selectable() }
+	first := true
 	section := func(title string, n int) bool {
-		ui.Text(c, title).Bold().TextColor(t.TextMuted).FontSize(12)
+		// Room above each section but the first sets them apart, where a line between them would add weight.
+		label := heading(c, title)
+		if !first {
+			label.Margin(t.Space(4), 0, 0, 0)
+		}
+		first = false
 		if n == 0 {
-			ui.Text(c, "None").TextColor(t.TextMuted)
+			ui.Text(c, "None").FontSize(smallText).TextColor(t.TextMuted)
 		}
 		return n > 0
 	}
+	for _, state := range []*ui.ListState{&s.columns, &s.indexes, &s.keys} {
+		state.RowHeight = rowHeight
+	}
 
-	if section("Columns", len(info.Columns)) {
+	if section("COLUMNS", len(info.Columns)) {
 		cols := []ui.TableColumn{{Title: "Name", Width: 220}, {Title: "Type", Width: 200}, {Title: "Nullable", Width: 90}, {Title: "Default", Width: 280}, {Title: "Key", Width: 80}}
 		ui.Table(c, &s.columns, cols, len(info.Columns), func(row, col int) {
 			column := info.Columns[row]
@@ -90,7 +108,7 @@ func (s *structure) infoView(c *ui.Context) {
 		}).FillWidth()
 	}
 
-	if section("Indexes", len(info.Indexes)) {
+	if section("INDEXES", len(info.Indexes)) {
 		cols := []ui.TableColumn{{Title: "Name", Width: 280}, {Title: "Columns", Width: 320}, {Title: "Kind", Width: 100}}
 		ui.Table(c, &s.indexes, cols, len(info.Indexes), func(row, col int) {
 			index := info.Indexes[row]
@@ -110,7 +128,7 @@ func (s *structure) infoView(c *ui.Context) {
 		}).FillWidth()
 	}
 
-	if section("Foreign Keys", len(info.ForeignKeys)) {
+	if section("FOREIGN KEYS", len(info.ForeignKeys)) {
 		cols := []ui.TableColumn{{Title: "Name", Width: 280}, {Title: "Columns", Width: 220}, {Title: "References", Width: 360}}
 		ui.Table(c, &s.keys, cols, len(info.ForeignKeys), func(row, col int) {
 			key := info.ForeignKeys[row]
@@ -126,7 +144,7 @@ func (s *structure) infoView(c *ui.Context) {
 	}
 
 	if s.ddl != nil {
-		ui.Text(c, "DDL").Bold().TextColor(t.TextMuted).FontSize(12)
+		heading(c, "DDL").Margin(t.Space(4), 0, 0, 0)
 		editor.View(c, s.ddl).FillWidth()
 	}
 }

@@ -22,15 +22,41 @@ func stroked(shapes string) *ui.SVG {
 }
 
 func iconButton(c *ui.Context, icon *ui.SVG, label string) ui.Element {
-	return slim(c, ui.Button(c, ""), icon, label)
+	return ghost(c, icon, label, false)
 }
 
+// primaryIconButton is iconButton for the one action a bar is for, drawn in the accent color.
 func primaryIconButton(c *ui.Context, icon *ui.SVG, label string) ui.Element {
-	return slim(c, ui.PrimaryButton(c, ""), icon, label)
+	return ghost(c, icon, label, true)
 }
 
-func slim(c *ui.Context, button ui.Element, icon *ui.SVG, label string) ui.Element {
-	return button.Label(label).Tooltip(label).Size(24, 24).Padding(0).Justify(ui.Center).Children(func() {
+func ghost(c *ui.Context, icon *ui.SVG, label string, accent bool) ui.Element {
+	t := c.Theme()
+	b := ui.ButtonBase(c).Label(label).Tooltip(label).Size(24, 24).Radius(t.Radius).Shrink(0)
+	color := t.TextMuted
+	switch {
+	case accent:
+		color = t.Accent
+	case b.Hovered():
+		color = t.Text
+	}
+	switch {
+	case b.Pressed():
+		b.Background(t.SurfacePressed)
+	case b.Hovered():
+		b.Background(t.SurfaceHover)
+	}
+	return b.TextColor(color).Children(func() {
 		ui.Icon(c, icon).Size(14, 14)
 	})
+}
+
+// toggleButton is iconButton held down while on, for choosing one of a few views.
+func toggleButton(c *ui.Context, icon *ui.SVG, label string, on bool) ui.Element {
+	t := c.Theme()
+	b := ghost(c, icon, label, false)
+	if on {
+		b.Background(t.SurfacePressed).TextColor(t.Text)
+	}
+	return b
 }

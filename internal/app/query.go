@@ -36,6 +36,8 @@ type QueryPane struct {
 	Color ui.Color
 	// ReadOnly says the connection takes no writes, so the rows shown are not offered for editing.
 	ReadOnly bool
+	// Trailing builds what goes at the end of the toolbar, as the switch between the views of a table.
+	Trailing func(c *ui.Context)
 
 	// open connects to the database. It is called on the first run and after the connection is lost.
 	open func(ctx context.Context) (driver.Conn, error)
@@ -114,32 +116,42 @@ func (p *QueryPane) View(c *ui.Context) {
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, p.commit)
 
 	ui.Column(c).Fill().Children(func() {
-		ui.Row(c).FillWidth().Padding(t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		bar := ui.Row(c).FillWidth().Height(barHeight).Shrink(0).Padding(0, t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center)
+		// A faint wash of the connection's color over the whole bar tells where the query runs without shouting it.
+		if p.Color != (ui.Color{}) {
+			bar.Background(p.Color.Alpha(0.08))
+		}
+		bar.Children(func() {
 			primaryIconButton(c, iconRun, "Run").Disabled(p.busy() || p.unsaved()).OnClick(p.run)
 			if p.busy() {
 				iconButton(c, iconStop, "Cancel").OnClick(p.cancelRun)
 			}
 			if p.Connection != "" {
-				name := ui.Row(c).Padding(2, t.Space(2)).Radius(999).Shrink(0)
-				if p.Color != (ui.Color{}) {
-					name.Background(p.Color.Alpha(0.18))
-				}
-				name.Children(func() { ui.Text(c, p.Connection).Bold().SingleLine() })
+				ui.Row(c).Gap(t.Space(1.5)).AlignItems(ui.Center).Shrink(0).Children(func() {
+					if p.Color != (ui.Color{}) {
+						colorDot(c, p.Color)
+					}
+					ui.Text(c, p.Connection).FontSize(smallText).FontWeight(600).SingleLine()
+				})
 				if p.ReadOnly {
-					ui.Row(c).Padding(2, t.Space(2)).Radius(999).Shrink(0).Background(t.Surface).Children(func() {
-						ui.Text(c, "Read-only").FontSize(11).TextColor(t.TextMuted).SingleLine()
+					ui.Row(c).Padding(1, t.Space(2)).Radius(999).Shrink(0).Border(1, t.Border).Children(func() {
+						ui.Text(c, "Read-only").FontSize(tinyText).TextColor(t.TextMuted).SingleLine()
 					})
 				}
-				ui.Text(c, p.Address).TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, p.Address).FontSize(smallText).TextColor(t.TextMuted).SingleLine()
+			}
+			ui.Spacer(c)
+			if p.Trailing != nil {
+				p.Trailing(c)
 			}
 		})
-		ui.Divider(c)
+		hairline(c)
 		ui.SplitVerticalPercent(c, &p.split, func() {
 			editor.View(c, p.editor).Fill().AutoFocus()
 		}, func() {
 			p.resultView(c)
 		}).Grow(1).FillWidth()
-		ui.Divider(c)
+		hairline(c)
 		p.statusView(c)
 	})
 }
@@ -160,6 +172,7 @@ func (p *QueryPane) resultView(c *ui.Context) {
 			CellText: t.Accent,
 			Row:      t.Accent.Alpha(0.05),
 		}
+		r.table.RowHeight = rowHeight
 		r.table.CellMenu = nil
 		// The rows stay as they are while a commit runs, which ends by reading them again.
 		editing := r.edits != nil && !p.running
@@ -187,7 +200,8 @@ func (p *QueryPane) unsaved() bool {
 
 func (p *QueryPane) statusView(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Padding(t.Space(1), t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	bar := ui.Row(c).FillWidth().MinHeight(rowHeight).Shrink(0).Padding(t.Space(0.5), t.Space(3)).Gap(t.Space(2)).AlignItems(ui.Center).Background(t.Surface)
+	bar.FontSize(smallText).Children(func() {
 		switch r := p.result; {
 		case p.running:
 			ui.Spinner(c)

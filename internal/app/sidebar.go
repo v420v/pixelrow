@@ -82,7 +82,8 @@ func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, pre
 		}
 		for _, table := range n.tables {
 			key := prefix + "\x00" + n.name + "\x00" + table.Name
-			item := ui.TreeItem(c, table.Name, nil, nil).Selected(*selected == key)
+			item := ui.TreeItem(c, table.Name, nil, nil)
+			chosenLook(c, item, *selected == key)
 			switch table.Kind {
 			case driver.KindView:
 				item.Tooltip("View")
