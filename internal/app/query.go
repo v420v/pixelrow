@@ -32,6 +32,10 @@ const (
 type QueryPane struct {
 	// Connection and Address name the database the pane runs on, shown beside the Run button.
 	Connection, Address string
+	// Color marks the pane as its connection's, when it is not the zero color.
+	Color ui.Color
+	// ReadOnly says the connection takes no writes, so the rows shown are not offered for editing.
+	ReadOnly bool
 
 	// open connects to the database. It is called on the first run and after the connection is lost.
 	open func(ctx context.Context) (driver.Conn, error)
@@ -116,7 +120,16 @@ func (p *QueryPane) View(c *ui.Context) {
 				iconButton(c, iconStop, "Cancel").OnClick(p.cancelRun)
 			}
 			if p.Connection != "" {
-				ui.Text(c, p.Connection).Bold().SingleLine()
+				name := ui.Row(c).Padding(2, t.Space(2)).Radius(999).Shrink(0)
+				if p.Color != (ui.Color{}) {
+					name.Background(p.Color.Alpha(0.18))
+				}
+				name.Children(func() { ui.Text(c, p.Connection).Bold().SingleLine() })
+				if p.ReadOnly {
+					ui.Row(c).Padding(2, t.Space(2)).Radius(999).Shrink(0).Background(t.Surface).Children(func() {
+						ui.Text(c, "Read-only").FontSize(11).TextColor(t.TextMuted).SingleLine()
+					})
+				}
 				ui.Text(c, p.Address).TextColor(t.TextMuted).SingleLine()
 			}
 		})
@@ -223,13 +236,15 @@ func (p *QueryPane) Run(sql string) {
 	p.running, p.cancel = true, cancel
 	p.runs++
 	id := p.runs
+	// Taken here, as the pane's fields belong to the UI thread.
+	editable := !p.ReadOnly
 	go func() {
 		p.session.Lock()
 		if old != nil {
 			oldCancel()
 			old.Close()
 		}
-		r := p.execute(ctx, sql)
+		r := p.execute(ctx, sql, editable)
 		p.session.Unlock()
 		r.id = id
 		p.update(func() {
@@ -359,10 +374,10 @@ func (p *QueryPane) cancelRun() {
 	}
 }
 
-func (p *QueryPane) execute(ctx context.Context, sql string) *result {
+func (p *QueryPane) execute(ctx context.Context, sql string, editable bool) *result {
 	start := time.Now()
 	r := &result{sql: sql, row: -1}
-	r.err = p.read(ctx, sql, r)
+	r.err = p.read(ctx, sql, r, editable)
 	r.elapsed = time.Since(start)
 	if r.stream == nil {
 		p.dropDeadConn(r.err)
@@ -378,7 +393,7 @@ func (p *QueryPane) dropDeadConn(err error) {
 	}
 }
 
-func (p *QueryPane) read(ctx context.Context, sql string, r *result) error {
+func (p *QueryPane) read(ctx context.Context, sql string, r *result, editable bool) error {
 	if p.conn == nil {
 		conn, err := p.open(ctx)
 		if err != nil {
@@ -389,7 +404,7 @@ func (p *QueryPane) read(ctx context.Context, sql string, r *result) error {
 	// The table's key is read before the query, whose open result keeps the session busy.
 	// Without it the result still shows, read-only.
 	var info *driver.TableInfo
-	if p.table != nil && p.table.selects(sql) {
+	if editable && p.table != nil && p.table.selects(sql) {
 		info, _ = p.conn.Describe(ctx, p.table.schema, p.table.table)
 	}
 	res, err := p.conn.Query(ctx, sql)

@@ -9,6 +9,8 @@ type Config struct {
 	User     string
 	Password string
 	Database string
+	// ReadOnly makes the session refuse statements that write.
+	ReadOnly bool
 }
 
 type Driver interface {

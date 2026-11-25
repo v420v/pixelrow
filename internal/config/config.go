@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -24,7 +25,13 @@ type Connection struct {
 	Database string `toml:"database"`
 	// SSH is the SSH server to reach Host through. Its zero value connects directly.
 	SSH SSH `toml:"ssh"`
+	// Color marks the connection wherever it shows, as "#rgb" or "#rrggbb", or is "" for none.
+	Color string `toml:"color"`
+	// ReadOnly keeps the app from writing to the database.
+	ReadOnly bool `toml:"readonly"`
 }
+
+var hexColor = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 
 // SSH is the server an SSH tunnel goes through: the ssh table of a connection, or a string that is its host alone.
 type SSH struct {
@@ -119,6 +126,11 @@ const template = `# Connections of the db client.
 # passphrase = "the passphrase of the key"
 # password = "the password of the server, where it asks for one"
 
+# A color to tell a connection apart wherever it shows, and readonly to keep the app from writing to it.
+# [connections.production]
+# color = "#dc2626"
+# readonly = true
+
 # Where the programs that dump and that run SQL files are, when the app does not find them by itself.
 # [tools]
 # mysqldump = "/opt/homebrew/opt/mysql-client/bin/mysqldump"
@@ -209,6 +221,9 @@ func Load(path string) (File, error) {
 		}
 		if conn.Port < 0 || conn.Port > 65535 {
 			return File{}, fmt.Errorf("connection %q has an invalid port %d", conn.Name, conn.Port)
+		}
+		if conn.Color != "" && !hexColor.MatchString(conn.Color) {
+			return File{}, fmt.Errorf("connection %q has an invalid color %q: write it as #rgb or #rrggbb", conn.Name, conn.Color)
 		}
 		out.Connections = append(out.Connections, conn)
 	}

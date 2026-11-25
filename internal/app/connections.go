@@ -113,7 +113,7 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 				runFile: s.runFileIn(n),
 			})
 		}
-	}).Selected(chosen).Tooltip(n.conf.Kind + " · " + address(n.conf))
+	}).Selected(chosen).Tooltip(n.conf.Kind + " · " + address(n.conf) + readOnlyNote(n.conf))
 	t := c.Theme()
 	dot, state := t.Border, "Not connected"
 	switch {
@@ -125,6 +125,7 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 		dot, state = t.Warning, "Connecting"
 	}
 	item.Children(func() {
+		colorChip(c, n.conf)
 		ui.Spacer(c)
 		ui.Column(c).Width(8).Height(8).Radius(4).Shrink(0).Background(dot).Label(name + ": " + state)
 	})
@@ -135,7 +136,7 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 			s.selected, s.selectedTable = name, ""
 			s.onQuery(name)
 		}
-		if m.Item("Run SQL File…").Chosen() {
+		if m.Item("Run SQL File…").Disabled(n.conf.ReadOnly).Chosen() {
 			s.onRunFile(name, "")
 		}
 		m.Separator()
@@ -160,7 +161,8 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 
 // runFileIn returns what runs a SQL file in a schema of n, or nil where a file cannot be aimed at one.
 func (s *connections) runFileIn(n *connNode) func(schema string) {
-	if client := tools.Clients[n.conf.Kind]; client == nil || !client.PerSchema {
+	// The client is another program, which the read-only setting of the app's own sessions does not hold back.
+	if client := tools.Clients[n.conf.Kind]; client == nil || !client.PerSchema || n.conf.ReadOnly {
 		return nil
 	}
 	return func(schema string) { s.onRunFile(n.conf.Name, schema) }
@@ -275,6 +277,7 @@ func (s *connections) dial(ctx context.Context, name string) (driver.Conn, error
 		User:     conf.User,
 		Password: conf.Password,
 		Database: conf.Database,
+		ReadOnly: conf.ReadOnly,
 	})
 }
 
@@ -389,4 +392,17 @@ func address(conn config.Connection) string {
 		s += " via " + conn.SSH.Destination()
 	}
 	return s
+}
+
+func colorChip(c *ui.Context, conn config.Connection) {
+	if conn.Color != "" {
+		ui.Column(c).Width(4).Height(14).Radius(2).Shrink(0).Background(ui.Hex(conn.Color)).Label("Color of " + conn.Name)
+	}
+}
+
+func readOnlyNote(conn config.Connection) string {
+	if conn.ReadOnly {
+		return " · read-only"
+	}
+	return ""
 }

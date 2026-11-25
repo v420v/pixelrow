@@ -57,6 +57,12 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 		c.Close()
 		return nil, wrapErr(ctx, err)
 	}
+	if cfg.ReadOnly {
+		if _, err := sc.ExecContext(ctx, "SET SESSION TRANSACTION READ ONLY"); err != nil {
+			c.Close()
+			return nil, wrapErr(ctx, err)
+		}
+	}
 	return c, nil
 }
 

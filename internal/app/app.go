@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"db/internal/config"
 	"db/internal/driver"
 )
 
@@ -113,7 +114,12 @@ func (a *App) tabsView(c *ui.Context) {
 		ui.ScrollHorizontal(c).FillWidth().Shrink(0).Children(func() {
 			a.tabBar(c, &closing)
 		})
-		ui.Divider(c)
+		// A band across the whole tab, so its connection is told at a glance and not only by reading the name.
+		if conf, _ := a.connections.conf(a.tabs[a.active].conn); conf.Color != "" {
+			ui.Column(c).FillWidth().Height(3).Shrink(0).Background(ui.Hex(conf.Color))
+		} else {
+			ui.Divider(c)
+		}
 		// The key gives each tab its own editor and table state.
 		tb := a.tabs[a.active]
 		if tb.structure != nil {
@@ -130,6 +136,10 @@ func (a *App) tabsView(c *ui.Context) {
 				}
 			})
 			ui.Divider(c)
+		}
+		// Read each time, so a color or readonly changed in the config file shows after a reload.
+		if conf, ok := a.connections.conf(tb.conn); ok {
+			a.mark(tb.pane, conf)
 		}
 		c.Key([2]int{tb.id, tb.view})
 		ui.Column(c).Grow(1).FillWidth().Children(func() {
@@ -167,7 +177,9 @@ func (a *App) tabBar(c *ui.Context, closing *int) {
 					*closing = i
 				}
 			})
+			conf, _ := a.connections.conf(tb.conn)
 			item.Children(func() {
+				colorChip(c, conf)
 				ui.Text(c, tb.conn).Bold().SingleLine()
 				ui.Text(c, tb.title).SingleLine()
 				if iconButton(c, iconClose, "Close "+tb.conn+" "+tb.title).Size(18, 18).Clicked() {
@@ -217,11 +229,20 @@ func (a *App) addTab(conn, table, title string) *tab {
 	a.ids++
 	conf, _ := a.connections.conf(conn)
 	pane := NewQueryPane(func(ctx context.Context) (driver.Conn, error) { return a.connections.dial(ctx, conn) }, a.update)
-	pane.Connection, pane.Address = conn, address(conf)
+	pane.Connection = conn
+	a.mark(pane, conf)
 	tb := &tab{id: a.ids, conn: conn, table: table, title: title, pane: pane}
 	a.tabs = append(a.tabs, tb)
 	a.active = len(a.tabs) - 1
 	return tb
+}
+
+func (a *App) mark(pane *QueryPane, conf config.Connection) {
+	pane.Address, pane.ReadOnly = address(conf), conf.ReadOnly
+	pane.Color = ui.Color{}
+	if conf.Color != "" {
+		pane.Color = ui.Hex(conf.Color)
+	}
 }
 
 func (a *App) closeTab(i int) {

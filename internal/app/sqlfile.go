@@ -44,7 +44,7 @@ type fileForm struct {
 func (r *fileRunner) ask(conn, database string) {
 	conf, ok := r.connections.conf(conn)
 	client := tools.Clients[conf.Kind]
-	if !ok || client == nil {
+	if !ok || client == nil || conf.ReadOnly {
 		return
 	}
 	path, err := r.chooseFile()
@@ -86,6 +86,7 @@ func (r *fileRunner) dialog(c *ui.Context) {
 				})
 				ui.Row(c).Gap(t.Space(3)).Children(func() {
 					ui.Text(c, "Runs on").TextColor(t.TextMuted).Width(70)
+					colorChip(c, f.conf)
 					ui.Text(c, f.target()).Bold().Selectable()
 				})
 			})

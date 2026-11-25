@@ -42,6 +42,9 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 	pc.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		return &pgconn.CancelRequestContextWatcherHandler{Conn: c, DeadlineDelay: 5 * time.Second}
 	}
+	if cfg.ReadOnly {
+		pc.RuntimeParams["default_transaction_read_only"] = "on"
+	}
 	c, err := pgconn.ConnectConfig(ctx, pc)
 	if err != nil {
 		return nil, wrapErr(ctx, err)
