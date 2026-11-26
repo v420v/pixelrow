@@ -1,0 +1,24 @@
+
+# <prefix>: <what the commit does, in one line>
+#
+#   feat:     a new feature
+#   fix:      a bug fix
+#   refactor: a change to the code that keeps its behavior
+#   style:    a change to how the app looks
+#   chore:    the build, configuration or development setup
+#   docs:     documentation only
+#
+# Examples:
+#   feat: add MySQL driver
+#   fix: scroll the tab bar when tabs overflow
+#
+# - Keep the first line within 72 characters, start it in lower case, and end it without a period.
+# - Say what the commit does, not which files or functions it touches.
+# - When one line is not enough, leave a blank line and list the rest as bullets.
+#
+#   feat: connect to databases through an SSH tunnel
+#
+#   - Start the system ssh to forward a local port
+#   - Refuse unknown host keys
+#
+# Lines starting with "#" are left out of the commit message.
