@@ -8,9 +8,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"db/internal/config"
-	"db/internal/driver"
-	"db/internal/tools"
+	"github.com/v420v/pixelrow/internal/config"
+	"github.com/v420v/pixelrow/internal/driver"
+	"github.com/v420v/pixelrow/internal/tools"
 )
 
 // connections is the tree of the config file's connections, each holding its schemas and tables once opened.

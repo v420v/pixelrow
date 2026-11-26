@@ -7,7 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 // structure shows the columns, indexes and foreign keys of one table.

@@ -9,9 +9,9 @@ import (
 // ssh has no option that takes a passphrase or a password. It asks a program instead, the one SSH_ASKPASS names,
 // which the app itself plays: started again with these variables set, it prints the secret and ends.
 const (
-	askpassEnv    = "DB_SSH_ASKPASS"
-	passphraseEnv = "DB_SSH_PASSPHRASE"
-	passwordEnv   = "DB_SSH_PASSWORD"
+	askpassEnv    = "PIXELROW_SSH_ASKPASS"
+	passphraseEnv = "PIXELROW_SSH_PASSPHRASE"
+	passwordEnv   = "PIXELROW_SSH_PASSWORD"
 )
 
 // Askpass answers ssh when the program was started as its askpass, and reports whether it was.

@@ -1,4 +1,4 @@
-module db
+module github.com/v420v/pixelrow
 
 go 1.27.3
 

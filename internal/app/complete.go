@@ -8,7 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui/editor"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 // completion is what the text around the caret asks for.

@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 type Driver struct{}

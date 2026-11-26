@@ -9,8 +9,8 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 
-	"db/internal/config"
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/config"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 // App is the main window: the tree of connections beside the tabs of queries.

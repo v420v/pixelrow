@@ -7,7 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 // browser loads the schemas and tables of one connection and builds their tree items.

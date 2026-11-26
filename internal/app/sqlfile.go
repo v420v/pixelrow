@@ -9,8 +9,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"db/internal/config"
-	"db/internal/tools"
+	"github.com/v420v/pixelrow/internal/config"
+	"github.com/v420v/pixelrow/internal/tools"
 )
 
 // fileRunner asks which SQL file to run on a connection and runs it with the database's own client.

@@ -7,12 +7,12 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"db/internal/app"
-	"db/internal/config"
-	"db/internal/driver"
-	"db/internal/driver/mysql"
-	"db/internal/driver/postgres"
-	"db/internal/tools"
+	"github.com/v420v/pixelrow/internal/app"
+	"github.com/v420v/pixelrow/internal/config"
+	"github.com/v420v/pixelrow/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver/mysql"
+	"github.com/v420v/pixelrow/internal/driver/postgres"
+	"github.com/v420v/pixelrow/internal/tools"
 )
 
 func main() {
@@ -60,7 +60,7 @@ func main() {
 		})
 		mygo.App.OnQuit(a.Close)
 		win = mygo.NewWindow(mygo.WindowOptions{
-			Title:   "db client",
+			Title:   "PixelRow",
 			Width:   1280,
 			Height:  800,
 			Content: ui.View(a.View),

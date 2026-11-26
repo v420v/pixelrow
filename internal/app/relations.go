@@ -8,7 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 // relations draws one table between the tables that refer to it, on its left, and those it refers to, on its right.

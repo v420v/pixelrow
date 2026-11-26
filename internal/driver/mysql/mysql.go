@@ -15,7 +15,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 type Driver struct{}

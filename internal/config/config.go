@@ -98,7 +98,7 @@ func (s *SSH) UnmarshalTOML(v any) error {
 const DefaultKind = "postgres"
 
 // template is written when there is no config file yet.
-const template = `# Connections of the db client.
+const template = `# Connections of PixelRow.
 # Each [connections.<name>] table is one connection. Quote names with spaces: [connections."My DB"].
 # This file holds passwords in plain text, so keep it readable by you alone.
 
@@ -148,7 +148,7 @@ func Path() (string, error) {
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "db", "config.toml"), nil
+	return filepath.Join(dir, "pixelrow", "config.toml"), nil
 }
 
 // Create writes a commented example to path unless a file is already there.

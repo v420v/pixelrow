@@ -10,9 +10,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"db/internal/config"
-	"db/internal/driver"
-	"db/internal/tools"
+	"github.com/v420v/pixelrow/internal/config"
+	"github.com/v420v/pixelrow/internal/driver"
+	"github.com/v420v/pixelrow/internal/tools"
 )
 
 // dumper asks what to dump, runs one dump at a time with the database's own tool, and shows how it goes at the foot of the sidebar.

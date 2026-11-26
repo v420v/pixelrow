@@ -1,8 +1,8 @@
 {
-  "name": "db",
-  "identifier": "com.example.db",
+  "name": "PixelRow",
+  "identifier": "com.example.pixelrow",
   "version": "0.1.0",
-  "main": "./cmd/db",
+  "main": "./cmd/pixelrow",
   "out": "build",
   "ios": { "minimumSystemVersion": "17.0" },
   "android": { "minSdk": 26 }

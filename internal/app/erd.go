@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"db/internal/driver"
+	"github.com/v420v/pixelrow/internal/driver"
 )
 
 // erModel is the tables of a schema and the foreign keys between them, placed on a plane.
