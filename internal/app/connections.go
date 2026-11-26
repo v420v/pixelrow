@@ -28,6 +28,8 @@ type connections struct {
 	// onDump is called to dump table of schema, or the whole schema when table is "".
 	onDump    func(conn, schema, table string)
 	onDiagram func(conn, schema string)
+	// onRefresh is called when the user asks to read a connection's tables again.
+	onRefresh func(conn string)
 	// onRunFile is called to run a SQL file on a connection, in database when it is not "".
 	onRunFile func(conn, database string)
 	footer    func(c *ui.Context)
@@ -162,6 +164,7 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 		s.disconnect(n)
 	case refresh:
 		n.browser.load()
+		s.onRefresh(name)
 	case item.Clicked():
 		// A click on the name chooses the connection and opens it, not only its arrow.
 		s.selected, s.selectedTable = name, ""

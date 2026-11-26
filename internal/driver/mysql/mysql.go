@@ -68,6 +68,8 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 
 func (Driver) DefaultPort() int { return 3306 }
 
+func (Driver) DefaultSchema(database string) string { return database }
+
 func (Driver) QuoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
@@ -297,6 +299,37 @@ func (c *conn) Diagram(ctx context.Context, schema string) (*driver.SchemaDiagra
 		d.ForeignKeys = append(d.ForeignKeys, fk)
 	}
 	return d, closeRows(ctx, rows)
+}
+
+func (c *conn) Catalog(ctx context.Context, schema string) ([]driver.CatalogTable, error) {
+	rows, err := c.sc.QueryContext(ctx, `
+		SELECT c.table_name, t.table_type, c.column_name, c.column_type
+		FROM information_schema.columns c
+		JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+		WHERE c.table_schema = ?
+		ORDER BY c.table_name, c.ordinal_position`, schema)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	var tables []driver.CatalogTable
+	for rows.Next() {
+		var name, kind string
+		var col driver.ColumnInfo
+		if err := rows.Scan(&name, &kind, &col.Name, &col.Type); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if n := len(tables); n == 0 || tables[n-1].Name != name {
+			table := driver.CatalogTable{Name: name}
+			if strings.Contains(kind, "VIEW") {
+				table.Kind = driver.KindView
+			}
+			tables = append(tables, table)
+		}
+		t := &tables[len(tables)-1]
+		t.Columns = append(t.Columns, col)
+	}
+	return tables, closeRows(ctx, rows)
 }
 
 func closeRows(ctx context.Context, rows *sql.Rows) error {

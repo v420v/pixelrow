@@ -21,6 +21,8 @@ type Driver interface {
 	Placeholder(n int) string
 	// DefaultPort is the port Open connects to when Config names none.
 	DefaultPort() int
+	// DefaultSchema is the schema a table named without one is looked up in, on a connection to database. It is "" when there is none.
+	DefaultSchema(database string) string
 }
 
 // Conn is a single database session.
@@ -38,6 +40,8 @@ type Conn interface {
 	References(ctx context.Context, schema, table string) ([]Reference, error)
 	// Diagram returns the tables of schema with their columns, and the foreign keys between them, read in a fixed number of queries however many tables there are.
 	Diagram(ctx context.Context, schema string) (*SchemaDiagram, error)
+	// Catalog returns the tables and views of schema, sorted by name, each with the Name and Type of its columns, in one query.
+	Catalog(ctx context.Context, schema string) ([]CatalogTable, error)
 
 	// Query runs sql, which may contain multiple statements.
 	// Canceling ctx stops the running query on the server.
@@ -98,6 +102,12 @@ type ForeignKey struct {
 	RefSchema  string
 	RefTable   string
 	RefColumns string
+}
+
+type CatalogTable struct {
+	Name    string
+	Kind    TableKind
+	Columns []ColumnInfo
 }
 
 // SchemaDiagram is what an entity-relationship diagram of a schema draws. Views are left out, as they have no keys.

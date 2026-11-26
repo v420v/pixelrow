@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 
 	"db/internal/config"
 	"db/internal/driver"
@@ -22,6 +23,9 @@ type App struct {
 	fileRunner   *fileRunner
 	jobs         *jobs
 	sidebarWidth float32
+
+	// catalogs holds the tables known for completion, by connection.
+	catalogs map[string]*catalog
 
 	tabs   []*tab
 	active int
@@ -82,6 +86,7 @@ func New(o Options) *App {
 	a.fileRunner = &fileRunner{connections: a.connections, jobs: a.jobs, chooseFile: o.ChooseFile}
 	a.connections.onDump = a.dumper.ask
 	a.connections.onDiagram = a.openDiagram
+	a.connections.onRefresh = func(conn string) { delete(a.catalogs, conn) }
 	a.connections.onRunFile = a.fileRunner.ask
 	a.connections.footer = a.jobs.view
 	return a
@@ -309,6 +314,9 @@ func (a *App) addTab(conn, table, title string) *tab {
 	pane := NewQueryPane(func(ctx context.Context) (driver.Conn, error) { return a.connections.dial(ctx, conn) }, a.update)
 	pane.Connection = conn
 	a.mark(pane, conf)
+	pane.Complete = func(text string, offset int, show func(start int, items []editor.Completion)) {
+		a.catalog(conn).complete(text, offset, show)
+	}
 	tb := &tab{id: a.ids, conn: conn, table: table, title: title, pane: pane}
 	a.tabs = append(a.tabs, tb)
 	a.active = len(a.tabs) - 1
@@ -339,6 +347,27 @@ func (a *App) moveTab(from, to int) {
 	a.active = slices.Index(a.tabs, shown)
 }
 
+// catalog returns what is known of the tables of the connection named conn, shared by its tabs.
+func (a *App) catalog(conn string) *catalog {
+	if cat := a.catalogs[conn]; cat != nil {
+		return cat
+	}
+	conf, _ := a.connections.conf(conn)
+	cat := &catalog{
+		dial:   func(ctx context.Context) (driver.Conn, error) { return a.connections.dial(ctx, conn) },
+		update: a.update,
+		drv:    a.drivers[conf.Kind],
+	}
+	if cat.drv != nil {
+		cat.defaultSchema = cat.drv.DefaultSchema(conf.Database)
+	}
+	if a.catalogs == nil {
+		a.catalogs = map[string]*catalog{}
+	}
+	a.catalogs[conn] = cat
+	return cat
+}
+
 func (a *App) closeTab(i int) {
 	a.tabs[i].pane.Close()
 	a.tabs = append(a.tabs[:i], a.tabs[i+1:]...)
@@ -350,6 +379,8 @@ func (a *App) closeTab(i int) {
 // disconnected closes the sessions of the tabs on the connection named conn.
 // The tabs stay, with their text, and connect again when they next run.
 func (a *App) disconnected(conn string) {
+	// The next completion reads the tables again, as they may be what changed.
+	delete(a.catalogs, conn)
 	for _, tb := range a.tabs {
 		if tb.conn == conn {
 			tb.pane.Close()

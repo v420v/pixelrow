@@ -38,6 +38,10 @@ type QueryPane struct {
 	ReadOnly bool
 	// Trailing builds what goes at the end of the toolbar, as the switch between the views of a table.
 	Trailing func(c *ui.Context)
+	// Complete offers completions for the caret at offset of text through show, which it can call later, on the UI thread.
+	Complete func(text string, offset int, show func(start int, items []editor.Completion))
+	// dotted is set by a dot typed, until the next build offers completions after it.
+	dotted bool
 
 	// open connects to the database. It is called on the first run and after the connection is lost.
 	open func(ctx context.Context) (driver.Conn, error)
@@ -96,7 +100,7 @@ type result struct {
 func NewQueryPane(open func(ctx context.Context) (driver.Conn, error), update func(fn func())) *QueryPane {
 	buf := editor.NewBuffer("")
 	buf.SetLanguage(editor.LanguageNamed("SQL"))
-	return &QueryPane{
+	p := &QueryPane{
 		open:   open,
 		update: update,
 		split:  40,
@@ -108,10 +112,36 @@ func NewQueryPane(open func(ctx context.Context) (driver.Conn, error), update fu
 			Bindings: []editor.Binding{{Mods: ui.Cmd, Key: ui.KeyEnter, Command: editor.NoCommand}},
 		},
 	}
+	p.editor.OnCompletion = func(r editor.CompletionRequest) { p.offer(r.Offset) }
+	// The editor asks for completions as a word is typed, and a dot starts no word: it is asked for here, once the dot is in the text.
+	p.editor.OnInput = func(ev ui.InputEvent) bool {
+		p.dotted = ev.Kind == ui.InputText && ev.Text == "."
+		return false
+	}
+	return p
+}
+
+// offer shows the completions for the caret at offset, when they come, unless the text has changed by then.
+func (p *QueryPane) offer(offset int) {
+	if p.Complete == nil {
+		return
+	}
+	version := p.editor.Buffer.Version()
+	p.Complete(p.editor.Buffer.String(), offset, func(start int, items []editor.Completion) {
+		if p.editor.Buffer.Version() == version {
+			p.editor.ShowCompletions(start, items)
+		}
+	})
 }
 
 func (p *QueryPane) View(c *ui.Context) {
 	t := c.Theme()
+	if p.dotted {
+		p.dotted = false
+		if at := p.editor.Cursor(); at > 0 && p.editor.Buffer.Slice(at-1, at) == "." {
+			p.offer(at)
+		}
+	}
 	c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, p.run)
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, p.commit)
 

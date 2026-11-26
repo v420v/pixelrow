@@ -54,6 +54,9 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 
 func (Driver) DefaultPort() int { return 5432 }
 
+// A session's search path can name others, and "public" is the one nearly every database keeps.
+func (Driver) DefaultSchema(string) string { return "public" }
+
 func (Driver) QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
@@ -325,6 +328,36 @@ func (c *conn) Diagram(ctx context.Context, schema string) (*driver.SchemaDiagra
 		})
 	}
 	return d, nil
+}
+
+func (c *conn) Catalog(ctx context.Context, schema string) ([]driver.CatalogTable, error) {
+	rows, err := c.read(ctx, `
+		SELECT c.relname, c.relkind, a.attname, format_type(a.atttypid, a.atttypmod)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+		WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')
+		ORDER BY c.relname, a.attnum`, schema)
+	if err != nil {
+		return nil, err
+	}
+	var tables []driver.CatalogTable
+	for _, r := range rows {
+		name := string(r[0])
+		if n := len(tables); n == 0 || tables[n-1].Name != name {
+			table := driver.CatalogTable{Name: name}
+			switch string(r[1]) {
+			case "v":
+				table.Kind = driver.KindView
+			case "m":
+				table.Kind = driver.KindMaterializedView
+			}
+			tables = append(tables, table)
+		}
+		t := &tables[len(tables)-1]
+		t.Columns = append(t.Columns, driver.ColumnInfo{Name: string(r[2]), Type: string(r[3])})
+	}
+	return tables, nil
 }
 
 func (c *conn) names(ctx context.Context, sql string) ([]string, error) {
