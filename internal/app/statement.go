@@ -92,3 +92,99 @@ func lower(c byte) byte {
 	}
 	return c
 }
+
+// span is a range of bytes of a text.
+type span struct{ start, end int }
+
+// statements returns where each statement of sql is, without the semicolon that ends it or the space around it.
+//
+// A semicolon ends a statement only outside strings, quoted names, comments and PostgreSQL's dollar-quoted bodies.
+// Backslash escapes are not followed, as the two databases disagree on them: where one matters, MySQL gets a statement cut short inside a string, which it refuses rather than runs.
+func statements(sql string) []span {
+	var out []span
+	start, code := 0, false
+	end := func(at int) {
+		// What holds only space or comments is no statement.
+		if code {
+			out = append(out, trim(sql, span{start, at}))
+		}
+		start, code = at+1, false
+	}
+	for i := 0; i < len(sql); {
+		c := sql[i]
+		switch {
+		case c == '-' && strings.HasPrefix(sql[i:], "--"):
+			n := strings.IndexByte(sql[i:], '\n')
+			if n < 0 {
+				n = len(sql) - i
+			}
+			i += n
+		case c == '/' && strings.HasPrefix(sql[i:], "/*"):
+			n := strings.Index(sql[i+2:], "*/")
+			if n < 0 {
+				i = len(sql)
+				break
+			}
+			i += n + 4
+		case c == '\'' || c == '"' || c == '`':
+			code = true
+			n := strings.IndexByte(sql[i+1:], c)
+			if n < 0 {
+				i = len(sql)
+				break
+			}
+			i += n + 2
+		case c == '$' && (i == 0 || !isNameByte(sql[i-1])):
+			code = true
+			// $tag$ opens a body that runs to the same tag, semicolons and all.
+			j := i + 1
+			for j < len(sql) && isNameByte(sql[j]) && sql[j] != '$' {
+				j++
+			}
+			if j >= len(sql) || sql[j] != '$' {
+				i++
+				break
+			}
+			tag := sql[i : j+1]
+			n := strings.Index(sql[j+1:], tag)
+			if n < 0 {
+				i = len(sql)
+				break
+			}
+			i = j + 1 + n + len(tag)
+		case c == ';':
+			end(i)
+			i++
+		default:
+			code = code || !isSpace(c)
+			i++
+		}
+	}
+	end(len(sql))
+	return out
+}
+
+func trim(sql string, s span) span {
+	for s.start < s.end && isSpace(sql[s.start]) {
+		s.start++
+	}
+	for s.end > s.start && isSpace(sql[s.end-1]) {
+		s.end--
+	}
+	return s
+}
+
+// statementAt returns the statement the caret is in. A caret between two statements is in the one before it
+// when it is on that statement's last line, as just after its semicolon, and in the one after it otherwise.
+func statementAt(sql string, caret int) (span, bool) {
+	all := statements(sql)
+	for i, s := range all {
+		if caret <= s.end || i == len(all)-1 {
+			return s, true
+		}
+		if caret < all[i+1].start && !strings.Contains(sql[s.end:caret], "\n") {
+			return s, true
+		}
+	}
+	return span{}, false
+}

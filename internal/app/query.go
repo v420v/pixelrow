@@ -42,6 +42,13 @@ type QueryPane struct {
 	Complete func(text string, offset int, show func(start int, items []editor.Completion))
 	// dotted is set by a dot typed, until the next build offers completions after it.
 	dotted bool
+	// marked is what the tint of the statement to run was last worked out for, to do it again only when one of them changes.
+	marked struct {
+		version  uint64
+		caret    int
+		selected bool
+		color    ui.Color
+	}
 
 	// open connects to the database. It is called on the first run and after the connection is lost.
 	open func(ctx context.Context) (driver.Conn, error)
@@ -108,8 +115,11 @@ func NewQueryPane(open func(ctx context.Context) (driver.Conn, error), update fu
 			Buffer:      buf,
 			Label:       "SQL",
 			Placeholder: "SELECT …",
-			// Cmd+Enter runs the query instead of opening a line below.
-			Bindings: []editor.Binding{{Mods: ui.Cmd, Key: ui.KeyEnter, Command: editor.NoCommand}},
+			// Cmd+Enter and Cmd+Shift+Enter run the query instead of opening a line below or above.
+			Bindings: []editor.Binding{
+				{Mods: ui.Cmd, Key: ui.KeyEnter, Command: editor.NoCommand},
+				{Mods: ui.Cmd | ui.Shift, Key: ui.KeyEnter, Command: editor.NoCommand},
+			},
 		},
 	}
 	p.editor.OnCompletion = func(r editor.CompletionRequest) { p.offer(r.Offset) }
@@ -142,7 +152,9 @@ func (p *QueryPane) View(c *ui.Context) {
 			p.offer(at)
 		}
 	}
+	p.markTarget(t.Accent.Alpha(0.09))
 	c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, p.run)
+	c.OnWindowShortcut(ui.Cmd|ui.Shift, ui.KeyEnter, p.runAll)
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, p.commit)
 
 	ui.Column(c).Fill().Children(func() {
@@ -152,7 +164,7 @@ func (p *QueryPane) View(c *ui.Context) {
 			bar.Background(p.Color.Alpha(0.08))
 		}
 		bar.Children(func() {
-			primaryIconButton(c, iconRun, "Run").Disabled(p.busy() || p.unsaved()).OnClick(p.run)
+			primaryIconButton(c, iconRun, "Run").Tooltip("Run the selection, or the statement at the caret").Disabled(p.busy() || p.unsaved()).OnClick(p.run)
 			if p.busy() {
 				iconButton(c, iconStop, "Cancel").OnClick(p.cancelRun)
 			}
@@ -259,13 +271,36 @@ func (p *QueryPane) statusView(c *ui.Context) {
 	})
 }
 
-// run executes the selected text, or the whole buffer when nothing is selected.
+// run executes the selected text, or the statement the caret is in when nothing is selected.
 func (p *QueryPane) run() {
-	sql := p.editor.Buffer.String()
 	if sel := p.editor.Selection(); sel.Start() != sel.End() {
-		sql = p.editor.Buffer.Slice(sel.Start(), sel.End())
+		p.Run(p.editor.Buffer.Slice(sel.Start(), sel.End()))
+		return
 	}
-	p.Run(sql)
+	sql := p.editor.Buffer.String()
+	if at, ok := statementAt(sql, p.editor.Cursor()); ok {
+		p.Run(sql[at.start:at.end])
+	}
+}
+
+func (p *QueryPane) runAll() {
+	p.Run(p.editor.Buffer.String())
+}
+
+// markTarget tints the statement that run would execute, where the text holds several and it is not plain which.
+func (p *QueryPane) markTarget(color ui.Color) {
+	version, caret := p.editor.Buffer.Version(), p.editor.Cursor()
+	sel := p.editor.Selection()
+	selected := sel.Start() != sel.End()
+	if p.marked.version == version && p.marked.caret == caret && p.marked.selected == selected && p.marked.color == color {
+		return
+	}
+	p.marked.version, p.marked.caret, p.marked.selected, p.marked.color = version, caret, selected, color
+	p.editor.TextBackgrounds = nil
+	sql := p.editor.Buffer.String()
+	if at, ok := statementAt(sql, caret); ok && !selected && len(statements(sql)) > 1 {
+		p.editor.TextBackgrounds = []editor.TextBackground{{Start: at.start, End: at.end, Color: color}}
+	}
 }
 
 // Run executes sql and shows its result, leaving the editor's text as it is.
