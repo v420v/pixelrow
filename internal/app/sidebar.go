@@ -31,7 +31,8 @@ type browser struct {
 type treeActions struct {
 	openTable func(schema, table string)
 	// dump asks to dump table of schema, or the whole schema when table is "".
-	dump func(schema, table string)
+	dump    func(schema, table string)
+	diagram func(schema string)
 	// runFile asks to run a SQL file in schema. It is nil where a schema is not something a file can be aimed at.
 	runFile func(schema string)
 }
@@ -106,6 +107,9 @@ func (b *browser) schemaItem(c *ui.Context, n *schemaNode, selected *string, pre
 		}
 	})
 	schema.ContextMenu(func(m *ui.Menu) {
+		if m.Item("ER Diagram").Chosen() {
+			actions.diagram(n.name)
+		}
 		if m.Item("Dump Schema…").Chosen() {
 			actions.dump(n.name, "")
 		}

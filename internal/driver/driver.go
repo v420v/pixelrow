@@ -36,6 +36,8 @@ type Conn interface {
 	Describe(ctx context.Context, schema, table string) (*TableInfo, error)
 	// References returns the foreign keys of other tables, and of the table itself, that point at table.
 	References(ctx context.Context, schema, table string) ([]Reference, error)
+	// Diagram returns the tables of schema with their columns, and the foreign keys between them, read in a fixed number of queries however many tables there are.
+	Diagram(ctx context.Context, schema string) (*SchemaDiagram, error)
 
 	// Query runs sql, which may contain multiple statements.
 	// Canceling ctx stops the running query on the server.
@@ -96,6 +98,25 @@ type ForeignKey struct {
 	RefSchema  string
 	RefTable   string
 	RefColumns string
+}
+
+// SchemaDiagram is what an entity-relationship diagram of a schema draws. Views are left out, as they have no keys.
+type SchemaDiagram struct {
+	// Tables are sorted by name.
+	Tables      []DiagramTable
+	ForeignKeys []DiagramForeignKey
+}
+
+type DiagramTable struct {
+	Name string
+	// Columns hold the Name, Type and PrimaryKey of each column, and nothing else.
+	Columns []ColumnInfo
+}
+
+type DiagramForeignKey struct {
+	// Table is the table of the schema that has the foreign key.
+	Table string
+	ForeignKey
 }
 
 // Reference is a foreign key seen from the table it points at.

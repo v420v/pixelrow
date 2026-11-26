@@ -43,6 +43,8 @@ type tab struct {
 	// structure and relations are nil for a blank query.
 	structure *structure
 	relations *relations
+	// diagram is set for the tab of a schema's diagram, which shows nothing else.
+	diagram *erDiagram
 	// view is 0 for the rows, 1 for the structure and 2 for the relations.
 	view int
 }
@@ -79,6 +81,7 @@ func New(o Options) *App {
 	a.dumper = &dumper{connections: a.connections, update: o.Update, jobs: a.jobs, saveFile: o.SaveFile}
 	a.fileRunner = &fileRunner{connections: a.connections, jobs: a.jobs, chooseFile: o.ChooseFile}
 	a.connections.onDump = a.dumper.ask
+	a.connections.onDiagram = a.openDiagram
 	a.connections.onRunFile = a.fileRunner.ask
 	a.connections.footer = a.jobs.view
 	return a
@@ -132,6 +135,8 @@ func (a *App) tabsView(c *ui.Context) {
 		c.Key([2]int{tb.id, tb.view})
 		ui.Column(c).Grow(1).FillWidth().Children(func() {
 			switch {
+			case tb.diagram != nil:
+				tb.diagram.view(c)
 			case tb.structure != nil && tb.view == 1:
 				tb.structure.view(c)
 			case tb.relations != nil && tb.view == 2:
@@ -278,6 +283,24 @@ func (a *App) openTable(conn, schema, table string) {
 	tb.pane.table = &tableRef{schema: schema, table: table, sql: sql, drv: drv}
 	tb.pane.SetText(sql)
 	tb.pane.Run(sql)
+}
+
+func (a *App) openDiagram(conn, schema string) {
+	// No table has a name with this byte, so the key cannot be that of a table's tab.
+	key := "\x00diagram\x00" + schema
+	for i, tb := range a.tabs {
+		if tb.conn == conn && tb.table == key {
+			a.active = i
+			return
+		}
+	}
+	tb := a.addTab(conn, key, schema)
+	tb.diagram = &erDiagram{
+		dial:   func(ctx context.Context) (driver.Conn, error) { return a.connections.dial(ctx, conn) },
+		update: a.update,
+		schema: schema,
+		open:   func(table string) { a.openTable(conn, schema, table) },
+	}
 }
 
 func (a *App) addTab(conn, table, title string) *tab {

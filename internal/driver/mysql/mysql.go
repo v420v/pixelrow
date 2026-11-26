@@ -249,6 +249,56 @@ func (c *conn) References(ctx context.Context, schema, table string) ([]driver.R
 	return refs, closeRows(ctx, rows)
 }
 
+func (c *conn) Diagram(ctx context.Context, schema string) (*driver.SchemaDiagram, error) {
+	rows, err := c.sc.QueryContext(ctx, `
+		SELECT c.table_name, c.column_name, c.column_type, c.column_key = 'PRI'
+		FROM information_schema.columns c
+		JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+		WHERE c.table_schema = ? AND t.table_type = 'BASE TABLE'
+		ORDER BY c.table_name, c.ordinal_position`, schema)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	d := &driver.SchemaDiagram{}
+	for rows.Next() {
+		var name string
+		var col driver.ColumnInfo
+		if err := rows.Scan(&name, &col.Name, &col.Type, &col.PrimaryKey); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if n := len(d.Tables); n == 0 || d.Tables[n-1].Name != name {
+			d.Tables = append(d.Tables, driver.DiagramTable{Name: name})
+		}
+		t := &d.Tables[len(d.Tables)-1]
+		t.Columns = append(t.Columns, col)
+	}
+	if err := closeRows(ctx, rows); err != nil {
+		return nil, err
+	}
+
+	rows, err = c.sc.QueryContext(ctx, `
+		SELECT table_name, constraint_name, GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ', '),
+			referenced_table_schema, referenced_table_name,
+			GROUP_CONCAT(referenced_column_name ORDER BY ordinal_position SEPARATOR ', ')
+		FROM information_schema.key_column_usage
+		WHERE table_schema = ? AND referenced_table_name IS NOT NULL
+		GROUP BY table_name, constraint_name, referenced_table_schema, referenced_table_name
+		ORDER BY table_name, constraint_name`, schema)
+	if err != nil {
+		return nil, wrapErr(ctx, err)
+	}
+	for rows.Next() {
+		var fk driver.DiagramForeignKey
+		if err := rows.Scan(&fk.Table, &fk.Name, &fk.Columns, &fk.RefSchema, &fk.RefTable, &fk.RefColumns); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		d.ForeignKeys = append(d.ForeignKeys, fk)
+	}
+	return d, closeRows(ctx, rows)
+}
+
 func closeRows(ctx context.Context, rows *sql.Rows) error {
 	err := rows.Err()
 	rows.Close()

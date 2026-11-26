@@ -26,7 +26,8 @@ type connections struct {
 	// onDisconnect is called after a connection is disconnected, or changed or removed in the config file.
 	onDisconnect func(conn string)
 	// onDump is called to dump table of schema, or the whole schema when table is "".
-	onDump func(conn, schema, table string)
+	onDump    func(conn, schema, table string)
+	onDiagram func(conn, schema string)
 	// onRunFile is called to run a SQL file on a connection, in database when it is not "".
 	onRunFile func(conn, database string)
 	footer    func(c *ui.Context)
@@ -111,6 +112,7 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 					s.onTable(name, schema, table)
 				},
 				dump:    func(schema, table string) { s.onDump(name, schema, table) },
+				diagram: func(schema string) { s.onDiagram(name, schema) },
 				runFile: s.runFileIn(n),
 			})
 		}

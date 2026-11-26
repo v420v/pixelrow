@@ -279,6 +279,54 @@ func (c *conn) References(ctx context.Context, schema, table string) ([]driver.R
 	return refs, nil
 }
 
+func (c *conn) Diagram(ctx context.Context, schema string) (*driver.SchemaDiagram, error) {
+	rows, err := c.read(ctx, `
+		SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), COALESCE(a.attnum = ANY (i.indkey), false)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+		LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisprimary
+		WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')
+		ORDER BY c.relname, a.attnum`, schema)
+	if err != nil {
+		return nil, err
+	}
+	d := &driver.SchemaDiagram{}
+	for _, r := range rows {
+		name := string(r[0])
+		if n := len(d.Tables); n == 0 || d.Tables[n-1].Name != name {
+			d.Tables = append(d.Tables, driver.DiagramTable{Name: name})
+		}
+		t := &d.Tables[len(d.Tables)-1]
+		t.Columns = append(t.Columns, driver.ColumnInfo{Name: string(r[1]), Type: string(r[2]), PrimaryKey: string(r[3]) == "t"})
+	}
+
+	rows, err = c.read(ctx, `
+		SELECT c.relname, con.conname,
+			(SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+			fn.nspname, fc.relname,
+			(SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+		FROM pg_constraint con
+		JOIN pg_class c ON c.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_class fc ON fc.oid = con.confrelid
+		JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+		WHERE con.contype = 'f' AND n.nspname = $1
+		ORDER BY c.relname, con.conname`, schema)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		d.ForeignKeys = append(d.ForeignKeys, driver.DiagramForeignKey{
+			Table:      string(r[0]),
+			ForeignKey: driver.ForeignKey{Name: string(r[1]), Columns: string(r[2]), RefSchema: string(r[3]), RefTable: string(r[4]), RefColumns: string(r[5])},
+		})
+	}
+	return d, nil
+}
+
 func (c *conn) names(ctx context.Context, sql string) ([]string, error) {
 	rows, err := c.read(ctx, sql)
 	if err != nil {
