@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/icon.png" alt="The PixelRow icon" width="128">
+</p>
+
 <h1 align="center">PixelRow</h1>
 
 <p align="center">
