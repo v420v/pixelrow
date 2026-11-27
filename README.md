@@ -74,6 +74,23 @@ color = "#dc2626"       # #rgb or #rrggbb
 readonly = true
 ```
 
+### Options
+
+Anything else the driver takes when it connects goes in an `options` table, under the driver's own names.
+
+```toml
+[connections.production.options]
+sslmode = "verify-full"
+sslrootcert = "~/certs/ca.pem"
+connect_timeout = 10
+statement_timeout = "30s"
+```
+
+- **PostgreSQL**: the [connection parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) that [pgx](https://pkg.go.dev/github.com/jackc/pgx/v5/pgconn#ParseConfig) knows, such as `sslmode`, `sslrootcert`, `sslcert`, `sslkey`, `connect_timeout` and `target_session_attrs`. Any other name is a setting of the session, such as `search_path` or `statement_timeout`.
+- **MySQL**: the [parameters of the Go driver](https://github.com/go-sql-driver/mysql#parameters), such as `tls` (`true`, `skip-verify`, `preferred`), `charset`, `collation` and `timeout`, and `ssl-ca`, `ssl-cert` and `ssl-key` for certificate files. Any other name is a system variable of the session, such as `sql_mode`.
+
+Dumps and SQL files connect with the same options, except that `mysqldump` and `mysql` only take the ones about TLS, and need `ssl-ca` to check a certificate. `host`, `port`, `user`, `password` and `database` stay on the connection itself, and `readonly` cannot be lifted from here.
+
 ### SSH tunnel
 
 `host` is the database as the SSH server sees it.

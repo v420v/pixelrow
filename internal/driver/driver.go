@@ -11,6 +11,10 @@ type Config struct {
 	Database string
 	// ReadOnly makes the session refuse statements that write.
 	ReadOnly bool
+	// Options are the driver's own connection parameters, by the names the driver gives them.
+	Options map[string]string
+	// ServerName is the host the server's certificate is checked against when Host is not the server itself, as the local end of a tunnel is not. "" means Host.
+	ServerName string
 }
 
 type Driver interface {

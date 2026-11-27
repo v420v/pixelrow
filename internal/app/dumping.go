@@ -186,15 +186,11 @@ func (f *dumpForm) target() string {
 
 func (f *dumpForm) options() (tools.DumpOptions, bool) {
 	o := tools.DumpOptions{
-		Host:     f.conf.Host,
-		Port:     f.conf.Port,
-		User:     f.conf.User,
-		Password: f.conf.Password,
-		Database: f.conf.Database,
-		Schema:   f.schema,
-		Content:  f.content,
-		Drop:     f.drop,
-		Extras:   map[string]bool{},
+		Target:  target(f.conf, f.conf.Database),
+		Schema:  f.schema,
+		Content: f.content,
+		Drop:    f.drop,
+		Extras:  map[string]bool{},
 	}
 	for i, extra := range f.tool.Extras {
 		o.Extras[extra.Key] = f.extras[i]

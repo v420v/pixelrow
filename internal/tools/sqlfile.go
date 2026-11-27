@@ -14,12 +14,8 @@ import (
 )
 
 type RunOptions struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	// Database is the database the file runs in. It can be empty for MySQL, when the file chooses one itself.
-	Database string
+	// Target's Database is the database the file runs in. It can be empty for MySQL, when the file chooses one itself.
+	Target
 
 	KeepGoing bool
 	// SingleTransaction undoes everything the file did when it fails or is canceled. Only some clients offer it.
@@ -47,6 +43,7 @@ func mysqlClient(o RunOptions) (args, env []string) {
 	if o.Port != 0 {
 		args = append(args, fmt.Sprintf("--port=%d", o.Port), "--protocol=TCP")
 	}
+	args = append(args, mysqlTLS(o.Target)...)
 	if o.KeepGoing {
 		args = append(args, "--force")
 	}
@@ -57,18 +54,13 @@ func mysqlClient(o RunOptions) (args, env []string) {
 }
 
 func psql(o RunOptions) (args, env []string) {
+	connect, env := pgConnect(o.Target)
 	args = []string{
-		"--host=" + o.Host, "--username=" + o.User,
+		connect,
 		"--no-password",
 		// The user's own startup file could change how the file runs.
 		"--no-psqlrc",
 		"--quiet",
-	}
-	if o.Port != 0 {
-		args = append(args, fmt.Sprintf("--port=%d", o.Port))
-	}
-	if o.Database != "" {
-		args = append(args, "--dbname="+o.Database)
 	}
 	// psql carries on after an error unless told to stop.
 	if !o.KeepGoing {
@@ -77,7 +69,7 @@ func psql(o RunOptions) (args, env []string) {
 	if o.SingleTransaction {
 		args = append(args, "--single-transaction")
 	}
-	return args, []string{"PGPASSWORD=" + o.Password}
+	return args, env
 }
 
 // A file whose name ends in .gz is decompressed on the way.
