@@ -33,6 +33,13 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 		Host:   net.JoinHostPort(cfg.Host, strconv.Itoa(port)),
 		Path:   "/" + cfg.Database,
 	}
+	// What pgconn does not know as a connection parameter it sends to the server as a setting of the session.
+	query := url.Values{}
+	for key, value := range cfg.Options {
+		query.Set(key, value)
+	}
+	// pgconn reads a "+" as it stands, not as the space Encode means by it.
+	u.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
 	pc, err := pgconn.ParseConfig(u.String())
 	if err != nil {
 		return nil, err
@@ -42,6 +49,17 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 	pc.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		return &pgconn.CancelRequestContextWatcherHandler{Conn: c, DeadlineDelay: 5 * time.Second}
 	}
+	if cfg.ServerName != "" {
+		if pc.TLSConfig != nil {
+			pc.TLSConfig.ServerName = cfg.ServerName
+		}
+		for _, fb := range pc.Fallbacks {
+			if fb.TLSConfig != nil {
+				fb.TLSConfig.ServerName = cfg.ServerName
+			}
+		}
+	}
+	// Set after the options, so that none of them lifts it.
 	if cfg.ReadOnly {
 		pc.RuntimeParams["default_transaction_read_only"] = "on"
 	}

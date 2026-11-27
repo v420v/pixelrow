@@ -29,7 +29,32 @@ type Connection struct {
 	Color string `toml:"color"`
 	// ReadOnly keeps the app from writing to the database.
 	ReadOnly bool `toml:"readonly"`
+	// Options are the connection parameters of the kind's own driver, such as sslmode for PostgreSQL and tls for MySQL.
+	Options Options `toml:"options"`
 }
+
+// Options is the options table of a connection. Numbers and booleans are kept as the text the drivers take.
+type Options map[string]string
+
+func (o *Options) UnmarshalTOML(v any) error {
+	table, ok := v.(map[string]any)
+	if !ok {
+		return errors.New("options must be a table")
+	}
+	*o = Options{}
+	for key, value := range table {
+		switch value.(type) {
+		case string, int64, float64, bool:
+			(*o)[key] = fmt.Sprint(value)
+		default:
+			return fmt.Errorf("options.%s must be a string, a number or a boolean", key)
+		}
+	}
+	return nil
+}
+
+// ownKeys are what a connection sets itself, so that an option cannot point it somewhere else.
+var ownKeys = []string{"host", "hostaddr", "port", "user", "password", "database", "dbname"}
 
 var hexColor = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 
@@ -131,6 +156,13 @@ const template = `# Connections of PixelRow.
 # color = "#dc2626"
 # readonly = true
 
+# Anything else the driver takes when it connects goes in options, under the driver's own names.
+# PostgreSQL: its connection parameters (sslmode, sslrootcert, connect_timeout, …) and settings (search_path, statement_timeout, …).
+# MySQL: the parameters of its Go driver (tls, charset, timeout, …), and ssl-ca, ssl-cert and ssl-key for certificate files.
+# [connections.production.options]
+# sslmode = "verify-full"
+# sslrootcert = "~/certs/ca.pem"
+
 # Where the programs that dump and that run SQL files are, when the app does not find them by itself.
 # [tools]
 # mysqldump = "/opt/homebrew/opt/mysql-client/bin/mysqldump"
@@ -224,6 +256,19 @@ func Load(path string) (File, error) {
 		}
 		if conn.Color != "" && !hexColor.MatchString(conn.Color) {
 			return File{}, fmt.Errorf("connection %q has an invalid color %q: write it as #rgb or #rrggbb", conn.Name, conn.Color)
+		}
+		for key, value := range conn.Options {
+			if slices.Contains(ownKeys, key) {
+				return File{}, fmt.Errorf("connection %q sets %s in options: set it on the connection itself", conn.Name, key)
+			}
+			// The options that name files are read by programs that do not know "~".
+			if rest, ok := strings.CutPrefix(value, "~/"); ok {
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return File{}, err
+				}
+				conn.Options[key] = filepath.Join(home, rest)
+			}
 		}
 		out.Connections = append(out.Connections, conn)
 	}

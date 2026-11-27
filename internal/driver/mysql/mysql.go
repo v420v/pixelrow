@@ -2,12 +2,17 @@
 package mysql
 
 import (
+	"cmp"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +32,34 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 	if port == 0 {
 		port = Driver{}.DefaultPort()
 	}
-	mc := mysql.NewConfig()
+	// The options are the parameters of a DSN, and parsing one is the driver's only way to take them.
+	var params []string
+	files := map[string]string{}
+	for key, value := range cfg.Options {
+		switch key {
+		case "ssl-ca", "ssl-cert", "ssl-key":
+			files[key] = value
+		default:
+			params = append(params, key+"="+url.QueryEscape(value))
+		}
+	}
+	mc, err := mysql.ParseDSN("/?" + strings.Join(params, "&"))
+	if err != nil {
+		return nil, err
+	}
+	if len(files) > 0 {
+		// A certificate given without tls asks for a checked connection.
+		if mc.TLS == nil {
+			mc.TLS = &tls.Config{}
+		}
+		if err := loadCerts(mc.TLS, files); err != nil {
+			return nil, err
+		}
+	}
+	// Parsing took the name to check from the DSN, which has no host.
+	if mc.TLS != nil && !mc.TLS.InsecureSkipVerify {
+		mc.TLS.ServerName = cmp.Or(cfg.ServerName, cfg.Host)
+	}
 	mc.Net = "tcp"
 	mc.Addr = net.JoinHostPort(cfg.Host, strconv.Itoa(port))
 	mc.User = cfg.User
@@ -64,6 +96,28 @@ func (Driver) Open(ctx context.Context, cfg driver.Config) (driver.Conn, error) 
 		}
 	}
 	return c, nil
+}
+
+// loadCerts gives t the certificates of files: the authority that signed the server's under ssl-ca, and the client's own under ssl-cert and ssl-key.
+func loadCerts(t *tls.Config, files map[string]string) error {
+	if ca := files["ssl-ca"]; ca != "" {
+		pem, err := os.ReadFile(ca)
+		if err != nil {
+			return err
+		}
+		t.RootCAs = x509.NewCertPool()
+		if !t.RootCAs.AppendCertsFromPEM(pem) {
+			return fmt.Errorf("ssl-ca: no certificate in %s", ca)
+		}
+	}
+	if files["ssl-cert"] != "" || files["ssl-key"] != "" {
+		cert, err := tls.LoadX509KeyPair(files["ssl-cert"], files["ssl-key"])
+		if err != nil {
+			return fmt.Errorf("ssl-cert and ssl-key: %w", err)
+		}
+		t.Certificates = []tls.Certificate{cert}
+	}
+	return nil
 }
 
 func (Driver) DefaultPort() int { return 3306 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 
@@ -235,7 +236,7 @@ func (s *connections) reload() {
 	for i, conf := range list {
 		confs[conf.Name] = conf
 		n := old[conf.Name]
-		if n != nil && n.conf == conf {
+		if n != nil && reflect.DeepEqual(n.conf, conf) {
 			delete(old, conf.Name)
 		} else {
 			n = &connNode{conf: conf}
@@ -285,13 +286,31 @@ func (s *connections) dial(ctx context.Context, name string) (driver.Conn, error
 		return nil, err
 	}
 	return drv.Open(ctx, driver.Config{
-		Host:     host,
-		Port:     port,
-		User:     conf.User,
-		Password: conf.Password,
-		Database: conf.Database,
-		ReadOnly: conf.ReadOnly,
+		Host:       host,
+		Port:       port,
+		User:       conf.User,
+		Password:   conf.Password,
+		Database:   conf.Database,
+		ReadOnly:   conf.ReadOnly,
+		Options:    conf.Options,
+		ServerName: tlsName(conf),
 	})
+}
+
+// target is the database of conf as a dump or a SQL file reaches it, before its tunnel moves the host and the port.
+func target(conf config.Connection, database string) tools.Target {
+	return tools.Target{
+		Host: conf.Host, Port: conf.Port, User: conf.User, Password: conf.Password, Database: database,
+		Options: conf.Options, ServerName: tlsName(conf),
+	}
+}
+
+// tlsName is the host the certificate of conf's server is checked against when it is reached through a tunnel, or "".
+func tlsName(conf config.Connection) string {
+	if conf.SSH.Host == "" {
+		return ""
+	}
+	return conf.Host
 }
 
 // tunnel is the SSH tunnel of one connection, shared by all its sessions.
@@ -323,7 +342,7 @@ func (s *connections) endpoint(ctx context.Context, conf config.Connection) (hos
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.open != nil && (!t.open.Alive() || t.conf != conf) {
+	if t.open != nil && (!t.open.Alive() || !reflect.DeepEqual(t.conf, conf)) {
 		t.open.Close()
 		t.open = nil
 	}

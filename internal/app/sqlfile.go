@@ -133,11 +133,7 @@ func (r *fileRunner) start() {
 		return
 	}
 	o := tools.RunOptions{
-		Host:              f.conf.Host,
-		Port:              f.conf.Port,
-		User:              f.conf.User,
-		Password:          f.conf.Password,
-		Database:          f.database,
+		Target:            target(f.conf, f.database),
 		KeepGoing:         f.keepGoing,
 		SingleTransaction: f.single && f.client.SingleTransaction,
 	}

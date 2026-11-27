@@ -22,12 +22,8 @@ const (
 )
 
 type DumpOptions struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	// Database is the database to connect to. PostgreSQL needs it, and MySQL takes Schema instead.
-	Database string
+	// Target's Database is the database to connect to. PostgreSQL needs it, and MySQL takes Schema instead.
+	Target
 
 	// Schema is the schema to dump: for MySQL, a database.
 	Schema string
@@ -78,6 +74,7 @@ func mysqldump(o DumpOptions) (args, env []string) {
 		// A port only counts over TCP, and "localhost" alone means the socket file.
 		args = append(args, fmt.Sprintf("--port=%d", o.Port), "--protocol=TCP")
 	}
+	args = append(args, mysqlTLS(o.Target)...)
 	switch o.Content {
 	case StructureOnly:
 		args = append(args, "--no-data")
@@ -103,13 +100,11 @@ var pgExtras = []Extra{
 }
 
 func pgDump(o DumpOptions) (args, env []string) {
+	connect, env := pgConnect(o.Target)
 	args = []string{
-		"--host=" + o.Host, "--username=" + o.User, "--dbname=" + o.Database,
+		connect,
 		// Without a terminal nobody could answer a password prompt.
 		"--no-password",
-	}
-	if o.Port != 0 {
-		args = append(args, fmt.Sprintf("--port=%d", o.Port))
 	}
 	switch o.Content {
 	case StructureOnly:
@@ -130,7 +125,7 @@ func pgDump(o DumpOptions) (args, env []string) {
 	for _, table := range o.Tables {
 		args = append(args, "--table="+pgName(o.Schema)+"."+pgName(table))
 	}
-	return args, []string{"PGPASSWORD=" + o.Password}
+	return args, env
 }
 
 func pgName(name string) string {
