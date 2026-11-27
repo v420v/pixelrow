@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net"
 	"reflect"
 	"strconv"
 	"sync"
@@ -135,6 +136,9 @@ func (s *connections) connItem(c *ui.Context, n *connNode) {
 		logo(c, n.conf.Kind)
 		ui.Column(c).Width(t.Space(1))
 		ui.Text(c, name).SingleLine()
+		ui.Column(c).Width(t.Space(1.5))
+		// The address gives way long before the name does when the sidebar is narrow.
+		ui.Text(c, s.hostPort(n.conf)).SingleLine().FontSize(smallText).TextColor(t.TextMuted).MinWidth(0).Shrink(100)
 		if n.conf.Color != "" {
 			ui.Column(c).Width(t.Space(1))
 			colorDot(c, ui.Hex(n.conf.Color))
@@ -409,6 +413,18 @@ func (s *connections) Close() {
 }
 
 // address describes where conn points, as user@host:port/database, with the SSH server it goes through.
+// hostPort is where the database of conn listens, with the port its kind uses when conn names none.
+func (s *connections) hostPort(conn config.Connection) string {
+	port := conn.Port
+	if drv := s.drivers[conn.Kind]; port == 0 && drv != nil {
+		port = drv.DefaultPort()
+	}
+	if port == 0 {
+		return conn.Host
+	}
+	return net.JoinHostPort(conn.Host, strconv.Itoa(port))
+}
+
 func address(conn config.Connection) string {
 	s := conn.Host
 	if conn.User != "" {
